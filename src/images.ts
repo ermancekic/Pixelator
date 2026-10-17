@@ -3,9 +3,9 @@ import { composite, createDocument } from './engine.js';
 import { AppError } from './store.js';
 import type { PixelDocument } from './types.js';
 
-export function renderPng(document: PixelDocument, scale = 1): Buffer {
+export function renderPng(document: PixelDocument, scale = 1, frameId?: string): Buffer {
   if (!Number.isInteger(scale) || scale < 1 || scale > 32) throw new AppError('RENDER_SIZE', 'Zoom muss ganzzahlig sein und zwischen 1 und 32 liegen.');
-  const rgba = composite(document);
+  const rgba = composite(document, frameId);
   const png = new PNG({ width: document.width * scale, height: document.height * scale });
   if (scale === 1) png.data.set(rgba);
   else for (let y = 0; y < document.height; y++) {
@@ -64,7 +64,7 @@ export function importPng(base64: string, maxColors: number, paletteLocked = fal
   }
   if (palette.length === 1) palette.push('#000000');
   const document = createDocument({ width, height, palette, maxColors, paletteLocked, layers: [{ id: 'import', name: 'PNG (unsegmentiert)' }] });
-  document.layers[0].pixels = pixels;
+  document.frames[0].cels.import = pixels;
   return document;
 }
 

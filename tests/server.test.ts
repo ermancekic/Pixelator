@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { PNG } from 'pngjs';
 import { createApp } from '../src/server.js';
 import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, McpStatus, Project } from '../src/types.js';
+import { cel } from './helpers.js';
 
 const apps = new Set<FastifyInstance>();
 const mcpHeaders = {
@@ -138,8 +139,10 @@ describe('local REST editing', () => {
     const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
     expect(current.revision.document.layers.map(layer => layer.id)).toEqual(['body', 'color-copy', 'sword']);
     expect(current.revision.document.layers[0]).toEqual(detail.revision.document.layers[0]);
+    expect(cel(current.revision.document, 0)).toEqual(cel(detail.revision.document, 0));
     expect(current.revision.document.layers[2]).toEqual(outlined.revision.document.layers[1]);
-    expect(current.revision.document.layers[1].pixels.filter(Boolean)).toEqual([3, 3, 3]);
+    expect(cel(current.revision.document, 2)).toEqual(cel(outlined.revision.document, 1));
+    expect(cel(current.revision.document, 1).filter(Boolean)).toEqual([3, 3, 3]);
     expect(current.revision.operations).toEqual(operations);
     const bundle = (await app.inject(`/api/projects/${project.id}/export`)).json();
     const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
@@ -177,8 +180,8 @@ describe('local REST editing', () => {
     } });
     expect(edited.statusCode, edited.body).toBe(200);
     const painted = edited.json<ApplyResult>().revision.document;
-    expect(painted.layers[0].pixels[20]).toBe(1);
-    expect(painted.layers[0].pixels[80 * 128 + 100]).toBe(0);
+    expect(cel(painted)[20]).toBe(1);
+    expect(cel(painted)[80 * 128 + 100]).toBe(0);
     expect(painted.pivot).toEqual({ x: 127.5, y: 96 });
     const pngResponse = await app.inject(`/api/assets/${detail.asset.id}/export?format=png`);
     expect(pngResponse.statusCode).toBe(200);
@@ -187,7 +190,7 @@ describe('local REST editing', () => {
     expect([...png.data.subarray(20 * 4, 20 * 4 + 4)]).toEqual([15, 56, 15, 255]);
     const pngImport = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Imported large prop', type: 'prop', pngBase64: pngResponse.rawPayload.toString('base64') } });
     expect(pngImport.statusCode, pngImport.body).toBe(200);
-    expect(pngImport.json<AssetDetail>().revision.document.layers[0].pixels).toEqual(painted.layers[0].pixels);
+    expect(cel(pngImport.json<AssetDetail>().revision.document)).toEqual(cel(painted));
     const bundle = (await app.inject(`/api/assets/${detail.asset.id}/export?format=json`)).json();
     const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
     expect(imported.statusCode, imported.body).toBe(200);
@@ -285,6 +288,7 @@ describe('local REST editing', () => {
     expect(painted.revision.id).not.toBe(detail.revision.id);
     expect(painted.diff.changedPixels).toBe(2);
     expect(painted.revision.document.layers[1]).toEqual(detail.revision.document.layers[1]);
+    expect(cel(painted.revision.document, 1)).toEqual(cel(detail.revision.document, 1));
 
     const replay = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload });
     expect(replay.statusCode).toBe(200);
@@ -315,7 +319,7 @@ describe('local REST editing', () => {
     const exported = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/export` });
     expect(exported.statusCode).toBe(200);
     expect(exported.headers['content-disposition']).toContain('attachment;');
-    expect(exported.json()).toMatchObject({ kind: 'pixelator-project', schemaVersion: 1 });
+    expect(exported.json()).toMatchObject({ kind: 'pixelator-project', schemaVersion: 2 });
     const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: exported.json() } });
     expect(imported.statusCode, imported.body).toBe(200);
     const copy = imported.json<Project>();
@@ -577,8 +581,8 @@ describe('MCP transport', () => {
       assetId: copy.asset.id, expectedRevision: copy.revision.id, requestId: 'replay-rows', editScope: { layerIds: ['body'] },
       operations: [{ op: 'rows', layerId: 'body', x: 0, y: 0, rows: layer.structuredContent!.rows }],
     } });
-    const original = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>().revision.document.layers[0].pixels;
-    expect((await app.inject(`/api/assets/${copy.asset.id}`)).json<AssetDetail>().revision.document.layers[0].pixels).toEqual(original);
+    const original = cel((await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>().revision.document);
+    expect(cel((await app.inject(`/api/assets/${copy.asset.id}`)).json<AssetDetail>().revision.document)).toEqual(original);
     const wide = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Wide', type: 'prop', width: 200, height: 100 } })).structuredContent as unknown as AssetDetail;
     const tooLarge = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: wide.asset.id } });
     expect(tooLarge.isError).toBe(true);
@@ -595,9 +599,10 @@ describe('MCP transport', () => {
     const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
     expect(compact.structuredContent).toEqual({
       assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixel bearbeitet',
-      diff: { changedPixels: 2, changedLayers: ['body'], boundingBox: { x: 1, y: 1, width: 2, height: 1 } },
+      diff: { changedPixels: 2, changedLayers: ['body'], changedFrames: ['frame-1'], boundingBox: { x: 1, y: 1, width: 2, height: 1 } },
       validation: { valid: true, colorCount: 2, opaquePixels: 2, boundingBox: { x: 1, y: 1, width: 2, height: 1 }, isolatedPixels: 0, issues: [] },
       layers: [{ id: 'body', visible: true, locked: false }, { id: 'sword', visible: true, locked: false }],
+      frames: [{ id: 'frame-1', durationMs: 100 }], tags: [],
     });
     expect(JSON.stringify(compact.structuredContent)).not.toContain('palette');
     const full = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
