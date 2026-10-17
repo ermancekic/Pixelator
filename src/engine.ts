@@ -1,7 +1,9 @@
 import { rowIndex } from './raster-text.js';
+import { activeSlots, autotileLayout, CENTER, composeTile, MAX_TERRAINS, MAX_TILE_TEXT, missingCombinations, TEMPLATE_COLUMNS, TEMPLATE_MODE, templateRows, TERRAIN_COLORS, TERRAIN_SLOTS, tileGrid, wangOf } from './tiles.js';
+import type { KeyTile } from './tiles.js';
 import type {
   AnimationTag, AnimationTagInput, EditScope, FrameReport, FrameView, Issue, LegacyPixelDocument, Operation, PixelDiff,
-  PixelDocument, PixelFrame, PixelLayer, PixelStyle, ProjectStyle, Rect, ValidationReport,
+  PixelDocument, PixelFrame, PixelLayer, PixelStyle, ProjectStyle, Rect, TerrainMode, TileInfo, Tileset, ValidationReport,
 } from './types.js';
 
 export const DEFAULT_PALETTE = [
@@ -68,6 +70,48 @@ function tagIssues(tags: unknown, frameCount: number): Issue[] {
     if (tag.loop !== undefined && typeof tag.loop !== 'boolean') return issue('Tag loop must be boolean.');
   }
   return [];
+}
+
+const rgbOf = (hex: string) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+/** Index of the opaque palette color closest to hex, weighted for perceived brightness; never the transparent index 0. */
+export function nearestColor(hex: string, palette: string[]): number {
+  const [r, g, b] = rgbOf(hex); let best = 1; let distance = Infinity;
+  for (let i = 1; i < palette.length; i++) {
+    const [pr, pg, pb] = rgbOf(palette[i]);
+    const d = 2 * (pr - r) ** 2 + 4 * (pg - g) ** 2 + 3 * (pb - b) ** 2;
+    if (d < distance) { distance = d; best = i; }
+  }
+  return best;
+}
+
+const TERRAIN_MODES = ['corner', 'edge', 'mixed'];
+const tileText = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && value.length <= MAX_TILE_TEXT;
+function tilesetIssues(tileset: unknown, width: number, height: number): Issue[] {
+  const issue = (message: string): Issue[] => [{ code: 'INVALID_TILESET', severity: 'error', message }];
+  if (!object(tileset)) return issue('tileset must be an object.');
+  const { tileWidth, tileHeight, terrainMode, terrains, tiles } = tileset;
+  if (!integer(tileWidth) || tileWidth < 1 || !integer(tileHeight) || tileHeight < 1) return issue('Tile width and height must be positive integers.');
+  if (width % tileWidth || height % tileHeight) return issue(`Canvas ${width}×${height} must be a multiple of the tile size ${tileWidth}×${tileHeight}.`);
+  if (!TERRAIN_MODES.includes(terrainMode as string)) return issue('terrainMode must be corner, edge or mixed.');
+  if (!Array.isArray(terrains) || terrains.length > MAX_TERRAINS || !terrains.every(terrain => object(terrain) && name(terrain.name) && typeof terrain.color === 'string' && /^#[0-9a-f]{6}$/i.test(terrain.color))) return issue(`Terrains need a name and #RRGGBB color; at most ${MAX_TERRAINS}.`);
+  if (!Array.isArray(tiles)) return issue('tiles must be a list.');
+  const count = (width / tileWidth) * (height / tileHeight); const seen = new Set<number>(); const slots = activeSlots(terrainMode as TerrainMode);
+  for (const tile of tiles) {
+    if (!object(tile) || !integer(tile.id) || tile.id < 0 || tile.id >= count || seen.has(tile.id)) return issue(`Tile IDs must be unique and below ${count}.`);
+    seen.add(tile.id);
+    if ((tile.name !== undefined && !tileText(tile.name)) || (tile.type !== undefined && !tileText(tile.type))) return issue(`Tile ${tile.id}: name and type need 1..${MAX_TILE_TEXT} characters.`);
+    if (tile.probability !== undefined && (typeof tile.probability !== 'number' || !Number.isFinite(tile.probability) || tile.probability < 0 || tile.probability > 1000)) return issue(`Tile ${tile.id}: probability must be in 0..1000.`);
+    if (tile.collision !== undefined && (!Array.isArray(tile.collision) || tile.collision.length > 8 || !tile.collision.every(area => object(area) && integer(area.x) && integer(area.y) && integer(area.width) && integer(area.height) && area.x >= 0 && area.y >= 0 && area.width >= 1 && area.height >= 1 && area.x + area.width <= tileWidth && area.y + area.height <= tileHeight))) return issue(`Tile ${tile.id}: collision needs up to 8 rectangles inside the tile.`);
+    if (tile.terrain !== undefined && (!Array.isArray(tile.terrain) || tile.terrain.length !== TERRAIN_SLOTS || !tile.terrain.every((value, slot) => integer(value) && value >= 0 && value <= terrains.length && (!value || slot === CENTER || slots.includes(slot))))) return issue(`Tile ${tile.id}: terrain needs ${TERRAIN_SLOTS} values in 0..${terrains.length}, set only on positions the ${terrainMode} mode reads.`);
+  }
+  return [];
+}
+/** Clears terrain values the mode ignores or whose terrain no longer exists; drops labels that end up empty. */
+function cleanTile(tile: TileInfo, mode: TerrainMode, terrains: number): TileInfo {
+  if (!tile.terrain) return tile;
+  const slots = activeSlots(mode); const terrain = tile.terrain.map((value, slot) => value <= terrains && (slot === CENTER || slots.includes(slot)) ? value : 0);
+  const { terrain: _old, ...rest } = tile;
+  return terrain.some(Boolean) ? { ...rest, terrain } : rest;
 }
 
 const normalizeTag = (tag: AnimationTagInput): AnimationTag => ({ name: tag.name, from: tag.from, to: tag.to, direction: tag.direction ?? 'forward', loop: tag.loop ?? true });
@@ -160,6 +204,7 @@ function validateStructure(doc: PixelDocument): ValidationReport {
     }
   }
   issues.push(...tagIssues(doc.tags, doc.frames.length));
+  if (doc.tileset !== undefined) issues.push(...tilesetIssues(doc.tileset, doc.width, doc.height));
   if (Array.isArray(doc.tags) && doc.tags.some(tag => object(tag) && (!TAG_DIRECTIONS.includes(tag.direction) || typeof tag.loop !== 'boolean'))) error('INVALID_TAGS', 'Stored tags need a direction and loop flag.');
   report.valid = !issues.some(issue => issue.severity === 'error');
   return report;
@@ -195,7 +240,14 @@ export function validateDocument(doc: PixelDocument): ValidationReport {
   else for (const frame of frames) {
     if (!frame.opaquePixels) report.issues.push({ code: 'EMPTY_FRAME', severity: 'warning', message: `Frame ${frame.frameId} has no visible pixels.`, frameId: frame.frameId });
   }
-  if (report.isolatedPixels) report.issues.push({ code: 'ISOLATED_PIXELS', severity: 'warning', message: `${report.isolatedPixels} visible pixels have no opaque neighbor.` });
+  if (report.isolatedPixels && !doc.tileset) report.issues.push({ code: 'ISOLATED_PIXELS', severity: 'warning', message: `${report.isolatedPixels} visible pixels have no opaque neighbor.` });
+  if (doc.tileset) {
+    const used = new Set(doc.tileset.tiles.flatMap(tile => tile.terrain ?? []).filter(Boolean));
+    for (const terrain of [...used].sort((a, b) => a - b)) {
+      const missing = missingCombinations(doc.tileset, terrain).length;
+      if (missing) report.issues.push({ code: 'TERRAIN_INCOMPLETE', severity: 'warning', message: `Terrain ${doc.tileset.terrains[terrain - 1].name}: ${missing} ${doc.tileset.terrainMode} combinations against empty cells have no labeled tile.` });
+    }
+  }
   return report;
 }
 
@@ -220,7 +272,7 @@ export function upgradeDocument(doc: PixelDocument | LegacyPixelDocument): Pixel
 export function createDocument(input: {
   width: number; height: number; palette?: string[]; maxColors?: number; paletteLocked?: boolean;
   layers?: { id: string; name: string }[]; pivot?: { x: number; y: number };
-  frames?: { id: string; durationMs?: number }[]; tags?: AnimationTagInput[];
+  frames?: { id: string; durationMs?: number }[]; tags?: AnimationTagInput[]; tileSize?: { width: number; height: number };
 }): PixelDocument {
   requireValue(object(input), 'INVALID_DOCUMENT', 'Document options must be an object.');
   requireValue(integer(input.width) && input.width >= 1 && integer(input.height) && input.height >= 1 && integer(input.width * input.height), 'INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
@@ -242,6 +294,7 @@ export function createDocument(input: {
     frames: frameOptions.map(frame => ({ id: frame.id, durationMs: frame.durationMs ?? DEFAULT_FRAME_MS, cels: Object.fromEntries(layerOptions.map(layer => [layer.id, new Array(cells).fill(0)])) })),
     tags: tags.map(normalizeTag),
     pivot: input.pivot ? { ...input.pivot } : { x: input.width / 2, y: input.height / 2 },
+    ...(input.tileSize ? { tileset: { tileWidth: input.tileSize.width, tileHeight: input.tileSize.height, terrainMode: 'mixed' as const, terrains: [], tiles: [] } } : {}),
   };
   assertDocument(doc);
   return doc;
@@ -302,14 +355,19 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     layers: original.layers.map(layer => ({ ...layer })),
     frames: original.frames.map(frame => ({ ...frame, cels: Object.fromEntries(Object.entries(frame.cels).map(([id, pixels]) => [id, pixels.slice()])) })),
     tags: original.tags.map(tag => ({ ...tag })),
+    ...(original.tileset ? { tileset: structuredClone(original.tileset) } : {}),
   };
-  const cells = doc.width * doc.height;
-  const canvas: Rect = { x: 0, y: 0, width: doc.width, height: doc.height };
+  // resize_canvas replaces both for the rest of the batch.
+  let cells = doc.width * doc.height;
+  let canvas: Rect = { x: 0, y: 0, width: doc.width, height: doc.height };
   const rect = (value: unknown): Rect => {
     requireValue(object(value) && integer(value.x) && integer(value.y) && integer(value.width) && integer(value.height) && value.width >= 1 && value.height >= 1 && value.x >= 0 && value.y >= 0 && value.x + value.width <= doc.width && value.y + value.height <= doc.height, 'INVALID_RECT', 'Rectangle must have positive integer dimensions inside the canvas.');
     return value as unknown as Rect;
   };
   const scopeRect = editScope.rect === undefined ? undefined : rect(editScope.rect);
+  requireValue(editScope.mask === undefined || (scopeRect && Array.isArray(editScope.mask) && editScope.mask.length === scopeRect.height && editScope.mask.every(row => typeof row === 'string' && row.length === scopeRect.width && /^[.#]+$/.test(row))), 'INVALID_SCOPE', 'mask needs rect and one row of # (writable) and . (protected) per rect row.');
+  const scopeMask = editScope.mask;
+  const writable = (x: number, y: number) => !scopeRect || (inside(scopeRect, x, y) && (!scopeMask || scopeMask[y - scopeRect.y][x - scopeRect.x] === '#'));
   const allowedLayers = new Set(editScope.layerIds);
   requireValue(editScope.layerIds.every(id => doc.layers.some(layer => layer.id === id)), 'INVALID_SCOPE', 'Scope contains an unknown layer.');
   const allowedFrames = editScope.frameIds === undefined ? null : new Set(editScope.frameIds);
@@ -357,6 +415,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     doc.tags = insertFrameIntoTags(doc.tags, index);
     allowedFrames?.add(frame.id);
   };
+  const requireTileset = (): Tileset => { requireValue(doc.tileset, 'NO_TILESET', 'This asset has no tile grid; set one with the tileset operation.'); return doc.tileset; };
   const color = (value: unknown): number => {
     requireValue(integer(value) && value >= 0 && value < doc.palette.length, 'INVALID_COLOR', 'Color must be an existing palette index.');
     return value;
@@ -372,7 +431,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     }
     const index = y * doc.width + x;
     if (target.pixels[index] === value) return;
-    requireValue(!scopeRect || inside(scopeRect, x, y), 'SCOPE_VIOLATION', 'Operation changes pixels outside the edit rectangle.');
+    requireValue(writable(x, y), 'SCOPE_VIOLATION', 'Operation changes pixels outside the edit rectangle or mask.');
     target.pixels[index] = value;
   };
   const line = (target: Raster, x1: number, y1: number, x2: number, y2: number, value: number) => {
@@ -443,6 +502,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       }
       case 'polygon': {
         const target = raster(operation.layerId, operation.frameId); const value = color(operation.color);
+        requireValue(operation.filled === undefined || typeof operation.filled === 'boolean', 'INVALID_OPERATION', 'filled must be boolean.');
         requireValue(Array.isArray(operation.points) && operation.points.length >= 3 && operation.points.length <= 128, 'INVALID_POINTS', 'Polygons need 3..128 vertices.');
         const points = Array.from(operation.points, point => {
           requireValue(Array.isArray(point) && point.length === 2, 'INVALID_POINTS', 'A polygon vertex must contain x, y.');
@@ -452,7 +512,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         });
         const minX = Math.min(...points.map(point => point[0])); const maxX = Math.max(...points.map(point => point[0]));
         const minY = Math.min(...points.map(point => point[1])); const maxY = Math.max(...points.map(point => point[1]));
-        for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
+        if (operation.filled !== false) for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
           let selected = false;
           for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
             const [xi, yi] = points[i]; const [xj, yj] = points[j];
@@ -472,14 +532,14 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireValue(operation.contiguous === undefined || typeof operation.contiguous === 'boolean', 'INVALID_OPERATION', 'contiguous must be boolean.');
         const x = coordinate(operation.x); const y = coordinate(operation.y);
         requireValue(inside(canvas, x, y), 'OUT_OF_BOUNDS', 'Fill start must be inside the canvas.');
-        requireValue(!scopeRect || inside(scopeRect, x, y), 'SCOPE_VIOLATION', 'Fill start must be inside the edit rectangle.');
+        requireValue(writable(x, y), 'SCOPE_VIOLATION', 'Fill start must be inside the edit rectangle or mask.');
         const source = operation.reference === 'composite' ? compositeIndices(doc, target.frame) : target.pixels;
         const from = source[y * doc.width + x];
         if (from === value && operation.reference !== 'composite') break;
         if (operation.contiguous === false) {
           const area = scopeRect ?? canvas;
           for (let py = area.y; py < area.y + area.height; py++) for (let px = area.x; px < area.x + area.width; px++) {
-            if (source[py * doc.width + px] === from) write(target, px, py, value);
+            if (source[py * doc.width + px] === from && writable(px, py)) write(target, px, py, value);
           }
           break;
         }
@@ -487,7 +547,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         const queue: number[] = [];
         const seen = operation.reference === 'composite' ? new Uint8Array(source.length) : undefined;
         const enqueue = (position: number) => {
-          if (source[position] !== from || seen?.[position]) return;
+          if (source[position] !== from || seen?.[position] || !writable(position % doc.width, Math.floor(position / doc.width))) return;
           if (seen) seen[position] = 1;
           write(target, position % doc.width, Math.floor(position / doc.width), value);
           queue.push(position);
@@ -543,21 +603,100 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         const target = raster(operation.layerId, operation.frameId); const from = color(operation.from); const to = color(operation.to);
         const area = operation.rect === undefined ? scopeRect ?? canvas : rect(operation.rect);
         for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) {
-          if (target.pixels[y * doc.width + x] === from) write(target, x, y, to);
+          if (target.pixels[y * doc.width + x] === from && writable(x, y)) write(target, x, y, to);
         }
         break;
       }
       case 'outline': {
-        const target = raster(operation.layerId, operation.frameId); const value = color(operation.color); const source = target.pixels.slice();
+        const target = raster(operation.layerId, operation.frameId); const value = color(operation.color);
         requireValue(value !== 0, 'INVALID_COLOR', 'Outline must use an opaque color.');
-        for (let y = 0; y < doc.height; y++) for (let x = 0; x < doc.width; x++) {
-          if (source[y * doc.width + x]) continue;
+        requireValue(operation.reference === undefined || operation.reference === 'layer' || operation.reference === 'composite', 'INVALID_OPERATION', 'Outline reference must be layer or composite.');
+        requireValue(operation.corners === undefined || typeof operation.corners === 'boolean', 'INVALID_OPERATION', 'corners must be boolean.');
+        // The outline grows around the reference shape and stays inside the rect, edit rectangle and mask.
+        const source = operation.reference === 'composite' ? compositeIndices(doc, target.frame) : target.pixels.slice();
+        const area = operation.rect === undefined ? canvas : rect(operation.rect); const corners = operation.corners ?? true;
+        for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) {
+          if (source[y * doc.width + x] || target.pixels[y * doc.width + x] || !writable(x, y)) continue;
           let neighbor = false;
           for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            if (inside(canvas, x + dx, y + dy) && source[(y + dy) * doc.width + x + dx]) neighbor = true;
+            if ((corners || !dx || !dy) && inside(canvas, x + dx, y + dy) && source[(y + dy) * doc.width + x + dx]) neighbor = true;
           }
           if (neighbor) write(target, x, y, value);
         }
+        break;
+      }
+      case 'shift': {
+        // Offsets with wrap-around, like an image offset filter, to bring tile edges into the middle.
+        const target = raster(operation.layerId, operation.frameId); const area = operation.rect === undefined ? canvas : rect(operation.rect);
+        const dx = coordinate(operation.dx); const dy = coordinate(operation.dy); const source = target.pixels.slice();
+        const wrap = (value: number, size: number) => ((value % size) + size) % size;
+        for (let y = 0; y < area.height; y++) for (let x = 0; x < area.width; x++) write(target, area.x + wrap(x + dx, area.width), area.y + wrap(y + dy, area.height), source[(area.y + y) * doc.width + area.x + x]);
+        break;
+      }
+      case 'autotile': {
+        requireLayerChanges(); const target = raster(operation.layerId, operation.frameId); const tileset = requireTileset();
+        const template = operation.template;
+        requireValue(template === 'blob' || template === 'edge' || template === 'corner', 'INVALID_OPERATION', 'Autotile template must be blob, edge or corner.');
+        const { tileWidth: tw, tileHeight: th } = tileset;
+        requireValue(!(tw % 2) && !(th % 2), 'TILE_SIZE', 'Autotiles are built from quarter tiles and need an even tile width and height.');
+        const grid = tileGrid(tileset, doc.width, doc.height); const ox = coordinate(operation.x ?? 0); const oy = coordinate(operation.y ?? 0); const rows = templateRows(template);
+        requireValue(ox >= 0 && oy >= 0 && ox + TEMPLATE_COLUMNS <= grid.columns && oy + rows <= grid.rows, 'TEMPLATE_DOES_NOT_FIT', `The ${template} template needs ${TEMPLATE_COLUMNS}×${rows} tiles starting at tile column ${ox}, row ${oy}; the grid has ${grid.columns}×${grid.rows}.`);
+        const terrain = operation.terrain ?? 1;
+        requireValue(integer(terrain) && terrain >= 1 && terrain <= MAX_TERRAINS, 'INVALID_TERRAIN', `terrain must be in 1..${MAX_TERRAINS}.`);
+        const layout = autotileLayout(template);
+        const read = (column: number, row: number) => {
+          const pixels: number[] = [];
+          for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) pixels.push(target.pixels[((oy + row) * th + y) * doc.width + (ox + column) * tw + x]);
+          return pixels;
+        };
+        const keys = Object.fromEntries(layout.filter(cell => cell.key).map(cell => [cell.key, read(cell.column, cell.row)])) as Record<KeyTile, number[]>;
+        keys.fill ??= keys.cross;
+        for (const cell of layout) {
+          if (cell.key) continue;
+          const pixels = composeTile(keys, template, cell.mask!, tw, th);
+          for (let i = 0; i < pixels.length; i++) write(target, (ox + cell.column) * tw + i % tw, (oy + cell.row) * th + Math.floor(i / tw), pixels[i]);
+        }
+        while (tileset.terrains.length < terrain) tileset.terrains.push({ name: `Terrain ${tileset.terrains.length + 1}`, color: TERRAIN_COLORS[tileset.terrains.length] });
+        if (tileset.terrainMode !== TEMPLATE_MODE[template]) { tileset.terrainMode = TEMPLATE_MODE[template]; tileset.tiles = tileset.tiles.map(tile => cleanTile(tile, tileset.terrainMode, tileset.terrains.length)); }
+        for (const cell of layout) {
+          const id = (oy + cell.row) * grid.columns + ox + cell.column; const existing = tileset.tiles.find(tile => tile.id === id);
+          const { terrain: _old, ...rest } = existing ?? { id };
+          const next: TileInfo = cell.mask === null ? rest : { ...rest, terrain: wangOf(cell.mask, terrain) };
+          tileset.tiles = [...tileset.tiles.filter(tile => tile.id !== id), ...(Object.keys(next).length > 1 ? [next] : [])];
+        }
+        tileset.tiles.sort((a, b) => a.id - b.id);
+        break;
+      }
+      case 'tileset': {
+        requireLayerChanges(); const current = doc.tileset;
+        const tileWidth = operation.tileWidth ?? current?.tileWidth; const tileHeight = operation.tileHeight ?? current?.tileHeight;
+        requireValue(integer(tileWidth) && tileWidth >= 1 && integer(tileHeight) && tileHeight >= 1, 'INVALID_TILESET', 'A new tile grid needs tileWidth and tileHeight.');
+        requireValue(!(doc.width % tileWidth) && !(doc.height % tileHeight), 'TILE_GRID', `Canvas ${doc.width}×${doc.height} must be a multiple of the tile size ${tileWidth}×${tileHeight}.`);
+        const terrainMode = operation.terrainMode ?? current?.terrainMode ?? 'mixed'; const terrains = operation.terrains ?? current?.terrains ?? [];
+        requireValue(TERRAIN_MODES.includes(terrainMode), 'INVALID_TILESET', 'terrainMode must be corner, edge or mixed.');
+        requireValue(Array.isArray(terrains) && terrains.length <= MAX_TERRAINS && terrains.every(terrain => object(terrain) && name(terrain.name) && typeof terrain.color === 'string' && /^#[0-9a-f]{6}$/i.test(terrain.color)), 'INVALID_TILESET', `Terrains need a name and #RRGGBB color; at most ${MAX_TERRAINS}.`);
+        // Tile IDs depend on the grid, so a new tile size starts without per-tile metadata.
+        const sameGrid = current && current.tileWidth === tileWidth && current.tileHeight === tileHeight;
+        doc.tileset = { tileWidth, tileHeight, terrainMode, terrains: terrains.map(terrain => ({ name: terrain.name, color: terrain.color.toUpperCase() })), tiles: sameGrid ? current.tiles.map(tile => cleanTile(tile, terrainMode, terrains.length)) : [] };
+        break;
+      }
+      case 'remove_tileset': {
+        requireLayerChanges(); requireTileset(); delete doc.tileset;
+        break;
+      }
+      case 'tile_properties': {
+        requireLayerChanges(); const tileset = requireTileset(); const { count } = tileGrid(tileset, doc.width, doc.height);
+        requireValue(Array.isArray(operation.tiles) && operation.tiles.length > 0, 'INVALID_TILE', 'tile_properties needs at least one tile.');
+        for (const input of operation.tiles) {
+          requireValue(object(input) && integer(input.id) && input.id >= 0 && input.id < count, 'INVALID_TILE', `Tile IDs must be in 0..${count - 1}.`);
+          const next: Record<string, unknown> = { ...(tileset.tiles.find(tile => tile.id === input.id) ?? { id: input.id }) };
+          for (const key of ['name', 'type', 'probability', 'collision', 'terrain'] as const) {
+            if (input[key] === null) delete next[key];
+            else if (input[key] !== undefined) next[key] = structuredClone(input[key]);
+          }
+          tileset.tiles = [...tileset.tiles.filter(tile => tile.id !== input.id), ...(Object.keys(next).length > 1 ? [next as unknown as TileInfo] : [])];
+        }
+        tileset.tiles.sort((a, b) => a.id - b.id);
         break;
       }
       case 'add_layer': {
@@ -596,6 +735,59 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireLayerChanges();
         requireValue(Array.isArray(operation.layerIds) && operation.layerIds.length === doc.layers.length && new Set(operation.layerIds).size === doc.layers.length && operation.layerIds.every(id => doc.layers.some(layer => layer.id === id)), 'INVALID_LAYERS', 'Reorder must contain every layer exactly once.');
         doc.layers = operation.layerIds.map(id => doc.layers.find(layer => layer.id === id)!);
+        break;
+      }
+      case 'merge_layers': {
+        requireLayerChanges();
+        requireValue(Array.isArray(operation.layerIds) && operation.layerIds.length >= 2 && new Set(operation.layerIds).size === operation.layerIds.length, 'INVALID_LAYERS', 'Merging needs at least two different layers.');
+        const merged = operation.layerIds.map(id => layerFor(id));
+        requireValue(merged.every(layer => layer.visible), 'INVALID_LAYERS', 'Only visible layers can be merged.');
+        const positions = merged.map(layer => doc.layers.indexOf(layer)).sort((a, b) => a - b);
+        // A visible layer between the merged ones would change the rendered image once its neighbors collapse.
+        requireValue(doc.layers.slice(positions[0], positions.at(-1)! + 1).every(layer => !layer.visible || operation.layerIds.includes(layer.id)), 'INVALID_LAYERS', 'Visible layers between merged layers must be merged as well.');
+        const target = doc.layers[positions[0]]; const sources = positions.slice(1).map(index => doc.layers[index]);
+        for (const frame of doc.frames) {
+          const pixels = frame.cels[target.id];
+          for (const layer of sources) {
+            const upper = frame.cels[layer.id];
+            for (let i = 0; i < cells; i++) if (upper[i]) pixels[i] = upper[i];
+            delete frame.cels[layer.id];
+          }
+        }
+        doc.layers = doc.layers.filter(layer => !sources.includes(layer));
+        break;
+      }
+      case 'resize_canvas': {
+        requireLayerChanges();
+        const width = operation.width; const height = operation.height;
+        requireValue(integer(width) && width >= 1 && integer(height) && height >= 1 && integer(width * height), 'INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
+        const dx = coordinate(operation.offsetX ?? 0); const dy = coordinate(operation.offsetY ?? 0);
+        const target: Rect = { x: 0, y: 0, width, height };
+        if (doc.tileset) {
+          // Tile IDs follow the grid; whole-tile changes keep each tile's metadata with its pixels.
+          const { tileWidth: tw, tileHeight: th } = doc.tileset;
+          requireValue(!(width % tw) && !(height % th) && !(dx % tw) && !(dy % th), 'TILE_GRID', `With a ${tw}×${th} tile grid, size and offset must be multiples of the tile size. Remove the tile grid first for other sizes.`);
+          const before = tileGrid(doc.tileset, doc.width, doc.height); const after = tileGrid(doc.tileset, width, height);
+          doc.tileset.tiles = doc.tileset.tiles.flatMap(tile => {
+            const column = tile.id % before.columns + dx / tw; const row = Math.floor(tile.id / before.columns) + dy / th;
+            return column >= 0 && row >= 0 && column < after.columns && row < after.rows ? [{ ...tile, id: row * after.columns + column }] : [];
+          }).sort((a, b) => a.id - b.id);
+        }
+        for (const frame of doc.frames) {
+          for (const layer of doc.layers) {
+            const source = frame.cels[layer.id]; const pixels = new Array(width * height).fill(0);
+            for (let i = 0; i < source.length; i++) {
+              if (!source[i]) continue;
+              const x = i % doc.width + dx; const y = Math.floor(i / doc.width) + dy;
+              if (inside(target, x, y)) pixels[y * width + x] = source[i];
+              else requireValue(!layer.locked, 'LAYER_LOCKED', `Cropping would remove pixels of locked layer ${layer.id}.`);
+            }
+            frame.cels[layer.id] = pixels;
+          }
+        }
+        doc.width = width; doc.height = height;
+        doc.pivot = { x: Math.max(0, Math.min(width, doc.pivot.x + dx)), y: Math.max(0, Math.min(height, doc.pivot.y + dy)) };
+        cells = width * height; canvas = target;
         break;
       }
       case 'add_frame': {
@@ -645,10 +837,14 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireValue(!doc.paletteLocked, 'PALETTE_LOCKED', 'This asset palette is locked.');
         const issues = paletteIssues(operation.colors, doc.maxColors);
         requireValue(!issues.length, 'INVALID_PALETTE', issues[0]?.message ?? 'Invalid palette.');
+        requireValue(operation.remap === undefined || operation.remap === 'index' || operation.remap === 'nearest', 'INVALID_OPERATION', 'Palette remap must be index or nearest.');
+        // index keeps every pixel's index; nearest moves each color to the closest color of the new palette.
+        const mapping = doc.palette.map((hex, index) => operation.remap !== 'nearest' || index === 0 ? index : nearestColor(hex, operation.colors));
         for (const layer of doc.layers) {
           if (!layer.locked) continue;
-          for (const frame of doc.frames) requireValue(frame.cels[layer.id].every(index => doc.palette[index].toUpperCase() === operation.colors[index]?.toUpperCase()), 'LAYER_LOCKED', `Palette would change locked layer ${layer.id}.`);
+          for (const frame of doc.frames) requireValue(frame.cels[layer.id].every(index => doc.palette[index].toUpperCase() === operation.colors[mapping[index]]?.toUpperCase()), 'LAYER_LOCKED', `Palette would change locked layer ${layer.id}.`);
         }
+        if (operation.remap === 'nearest') for (const frame of doc.frames) for (const layer of doc.layers) frame.cels[layer.id] = frame.cels[layer.id].map(index => mapping[index]);
         doc.palette = [...operation.colors];
         break;
       }
@@ -668,12 +864,16 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
   }
   const validation = validateDocument(doc);
   requireValue(validation.valid, validation.issues[0]?.code ?? 'INVALID_DOCUMENT', validation.issues[0]?.message ?? 'Invalid operation result.');
-  return { document: doc, diff: diffDocuments(original, doc, { layers: allowedLayers, frames: allowedFrames, rect: scopeRect }), validation };
+  return { document: doc, diff: diffDocuments(original, doc, { layers: allowedLayers, frames: allowedFrames, writable }), validation };
 }
 
 /** Compares two valid documents and enforces that every changed pixel lies inside the write scope. */
-function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { layers: Set<string>; frames: Set<string> | null; rect?: Rect }): PixelDiff {
+function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { layers: Set<string>; frames: Set<string> | null; writable: (x: number, y: number) => boolean }): PixelDiff {
   const cells = doc.width * doc.height;
+  if (original.width !== doc.width || original.height !== doc.height) {
+    // A resized canvas was authorized by resize_canvas, which requires full scope; every remaining pixel counts as changed.
+    return { changedPixels: cells * doc.frames.length, changedLayers: doc.layers.map(layer => layer.id), changedFrames: doc.frames.map(frame => frame.id), boundingBox: { x: 0, y: 0, width: doc.width, height: doc.height } };
+  }
   const beforePalette = original.palette.map(color => color.toUpperCase()); const afterPalette = doc.palette.map(color => color.toUpperCase());
   const layerIds = [...new Set([...original.layers.map(layer => layer.id), ...doc.layers.map(layer => layer.id)])];
   const frameIds = [...new Set([...original.frames.map(frame => frame.id), ...doc.frames.map(frame => frame.id)])];
@@ -695,7 +895,7 @@ function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { lay
     for (let i = 0; i < cells; i++) {
       const a = before ? beforePalette[before[i]] : beforePalette[0]; const b = after ? afterPalette[after[i]] : afterPalette[0];
       if (a === b) continue;
-      if (checked) requireValue(writable && (!scope.rect || inside(scope.rect, i % doc.width, Math.floor(i / doc.width))), 'SCOPE_VIOLATION', 'Rendered pixels changed outside the edit scope.');
+      if (checked) requireValue(writable && scope.writable(i % doc.width, Math.floor(i / doc.width)), 'SCOPE_VIOLATION', 'Rendered pixels changed outside the edit scope.');
       marks[i] = 1;
     }
     for (const layerId of layerIds) {
@@ -704,7 +904,7 @@ function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { lay
         const a = oldPixels?.[i] ?? 0; const b = newPixels?.[i] ?? 0;
         if (a === b && original.palette[a] === doc.palette[b]) continue;
         changedLayers.add(layerId); marks[i] = 1;
-        if (checked) requireValue(scope.layers.has(layerId) && writable && (!scope.rect || inside(scope.rect, i % doc.width, Math.floor(i / doc.width))), 'SCOPE_VIOLATION', 'Stored pixels changed outside the edit scope.');
+        if (checked) requireValue(scope.layers.has(layerId) && writable && scope.writable(i % doc.width, Math.floor(i / doc.width)), 'SCOPE_VIOLATION', 'Stored pixels changed outside the edit scope.');
       }
     }
     for (let i = 0; i < cells; i++) if (marks[i]) { changedPixels++; union[i] = 1; frameChanged = true; }

@@ -9,7 +9,9 @@ import { z } from 'zod';
 import { Store, AppError } from './store.js';
 import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
-import { framesFor, renderGif, renderPng, renderSheet, renderThumbnail, importPng, sheetManifest, sliceSheet, unityManifest, unitySheetManifest } from './images.js';
+import { framesFor, renderGif, renderPng, renderSheet, renderThumbnail, importPng, sheetLayout, sheetManifest, sliceSheet, unityManifest, unitySheetManifest } from './images.js';
+import { writePalette } from './palette-formats.js';
+import { godotTileset, renderTilesetImage, tiledTileset, tiledTilesetXml, tilesetLayout, unityTilesetManifest } from './tileset-export.js';
 import * as schema from './contracts.js';
 import type { McpAgent, McpStatus } from './types.js';
 
@@ -76,6 +78,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   });
   app.get('/api/presets', () => STYLE_PRESETS);
   app.get('/api/projects', () => store.listProjects());
+  app.get('/api/projects/overview', (_request, reply) => reply.header('Cache-Control', 'no-store').send(store.projectOverview()));
   app.post('/api/projects', request => store.createProject(request.body));
   app.patch<{ Params: { id: string } }>('/api/projects/:id', request => store.updateProject(request.params.id, request.body));
   app.delete<{ Params: { id: string } }>('/api/projects/:id', request => store.deleteProject(request.params.id));
@@ -108,17 +111,33 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderThumbnail(revision.document));
   });
   app.get<{ Params: { id: string } }>('/api/assets/:id/export', (request, reply) => {
-    const query = z.object({ format: z.enum(['png', 'json', 'unity', 'sheet', 'sheet-json', 'gif']).default('png'), frameId: z.string().min(1).max(100).optional(), tag: z.string().min(1).max(160).optional(), columns: z.coerce.number().int().min(1).max(64).optional(), scale: z.coerce.number().int().min(1).max(16).optional() }).strict().parse(request.query);
+    const query = z.object({
+      format: z.enum(['png', 'json', 'unity', 'sheet', 'sheet-json', 'gif', 'gpl', 'hex', 'pal', 'tileset', 'tsj', 'tsx', 'tres']).default('png'), frameId: z.string().min(1).max(100).optional(), tag: z.string().min(1).max(160).optional(),
+      columns: z.coerce.number().int().min(1).max(64).optional(), scale: z.coerce.number().int().min(1).max(16).optional(),
+      extrude: z.coerce.number().int().min(0).max(4).optional(), spacing: z.coerce.number().int().min(0).max(8).optional(),
+    }).strict().parse(request.query);
     const { asset, revision } = store.getAsset(request.params.id); const { document } = revision;
     const name = asset.name.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 80) || 'asset';
-    const sheet = () => renderSheet(document, { frameIds: framesFor(document, query.tag), columns: query.columns });
-    const extension = { png: 'png', json: 'pixelator.json', unity: 'unity.json', sheet: 'sheet.png', 'sheet-json': 'sheet.json', gif: 'gif' }[query.format];
+    // scale enlarges PNG, sheet and GIF by nearest neighbor; sheet-json then addresses the enlarged sheet. Unity metadata stays at 1x.
+    const scale = query.scale ?? 1;
+    const sheet = (sheetScale = scale) => renderSheet(document, { frameIds: framesFor(document, query.tag), columns: query.columns, scale: sheetScale });
+    const extension = { png: 'png', json: 'pixelator.json', unity: 'unity.json', sheet: 'sheet.png', 'sheet-json': 'sheet.json', gif: 'gif', gpl: 'gpl', hex: 'hex', pal: 'pal', tileset: 'tileset.png', tsj: 'tsj', tsx: 'tsx', tres: 'tres' }[query.format];
+    // Tileset files reference the image by the name the tileset format downloads under, next to them.
+    let layout: ReturnType<typeof tilesetLayout> | undefined; const tileImage = `${name}.tileset.png`;
+    const tiles = () => layout ??= tilesetLayout(document, { extrude: query.extrude, spacing: query.spacing });
+    if (['tileset', 'tsj', 'tsx', 'tres'].includes(query.format)) tiles();
     reply.header('Content-Disposition', `attachment; filename="${name}.${extension}"`);
-    if (query.format === 'png') return reply.type('image/png').send(renderPng(document, 1, query.frameId));
+    if (query.format === 'tileset') return reply.type('image/png').send(renderTilesetImage(document, { extrude: query.extrude, spacing: query.spacing }).png);
+    if (query.format === 'tsj') return reply.type('application/json').send(tiledTileset(document, asset.name, tileImage, tiles()));
+    if (query.format === 'tsx') return reply.type('application/xml; charset=utf-8').send(tiledTilesetXml(document, asset.name, tileImage, tiles()));
+    if (query.format === 'tres') return reply.type('text/plain; charset=utf-8').send(godotTileset(document, tileImage, tiles()));
+    if (query.format === 'png') return reply.type('image/png').send(renderPng(document, scale, query.frameId));
     if (query.format === 'sheet') return reply.type('image/png').send(sheet().png);
-    if (query.format === 'gif') return reply.type('image/gif').send(renderGif(document, { tag: query.tag, scale: query.scale }));
-    if (query.format === 'sheet-json') return reply.type('application/json').send(sheetManifest(asset.name, `${name}.sheet.png`, document, sheet().layout));
-    if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheet().layout }) : unityManifest(asset.id, revision.id, asset.name, document));
+    if (query.format === 'gif') return reply.type('image/gif').send(renderGif(document, { tag: query.tag, scale }));
+    if (query.format === 'gpl' || query.format === 'hex' || query.format === 'pal') return reply.type('text/plain; charset=utf-8').send(writePalette(document.palette, query.format, asset.name));
+    if (query.format === 'sheet-json') return reply.type('application/json').send(sheetManifest(asset.name, `${name}.sheet.png`, document, sheetLayout(document, { frameIds: framesFor(document, query.tag), columns: query.columns }), scale));
+    if (query.format === 'unity' && document.tileset) return reply.type('application/json').send(unityTilesetManifest(asset.id, revision.id, asset.name, document, tileImage, tiles()));
+    if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheetLayout(document, { frameIds: framesFor(document, query.tag), columns: query.columns }) }) : unityManifest(asset.id, revision.id, asset.name, document));
     return reply.type('application/json').send(store.exportAsset(asset.id));
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/export', (request, reply) => reply.type('application/json').header('Content-Disposition', 'attachment; filename="project.pixelator.json"').send(store.exportProject(request.params.id)));

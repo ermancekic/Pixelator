@@ -2,6 +2,38 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
+## Ergänzung: Projektübersicht
+
+Die Projektauswahl ist ein Fenster mit Projektkarten statt einer Auswahlliste. Ein Servertest prüft die Übersicht (Assetzahl, letzte Änderung, Reihenfolge und Revision der Vorschau-Assets, leeres Projekt).
+
+**Browser** (Chromium, eigener Datenordner, vier Projekte mit gezeichneten Assets) mit 14 Prüfungen:
+- Sortierung nach Aktivität, vier Vorschaubilder, Markierung „Geöffnet“ sowie Stil, Assetzahl und Änderungszeit.
+- Suche mit `Enter`, Wechsel per Pfeiltasten und `Enter`, Hinweis bei leerem Ergebnis, `Esc`.
+- „Neues Projekt“ aus dem Fenster und die Darstellung ohne Assets.
+- Mobile Breite ohne horizontales Scrollen.
+- Keine Seiten- oder Konsolenfehler.
+
+## Ergänzung: Tiles
+
+Am 17. Oktober 2026 bestanden **218 Tests in 15 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Kachelraster und Metadaten-Validierung, `tileset`/`tile_properties`/`remove_tileset`, Remap bei `resize_canvas`, `shift`, Autotile-Komposition (47/16/15 Kombinationen, Viertel- und Halbversatz-Regeln), Terrain-Zuordnung mit Wahrscheinlichkeit, Testkarten-Render, Tileset-Layout mit Extrude, Tiled-/Godot-/Unity-Export, REST- und MCP-Durchlauf sowie nahtloses Zeichnen.
+
+**Externe Werkzeuge:** Ein mit der Engine erzeugtes 16×16-Blob-Tileset (Autotile aus fünf Schlüsselkacheln, Name, Klasse, Kollision, Häufigkeit, zwei Frames, Extrude 1) wurde exportiert und mit den Originalwerkzeugen geprüft.
+- **Godot 4.3** (headless, offizielles Linux-Release) lädt die `.tres` mit 47 Kacheln, Terrain-Set „Gras“ im Modus 0, Kollisionspolygon um die Kachelmitte, Custom Data, Häufigkeit 0,5 und Animation; Frame 2 liegt korrekt bei Pixel (73, 109).
+- Godots eigener Terrain-Pinsel (`set_cells_terrain_connect`) wählte für eine Testform in **48 von 48 Zellen dieselbe Kachel** wie Pixelators Testkarte.
+- **pytiled-parser 2.2.9** las TSX und TSJ identisch: 96 Kacheln (2 Frames), Rand 1, Abstand 2, Animation 4→52, Kollisionsobjekt und ein Wang-Set mit 46 Kacheln. Die Einzelkachel bleibt ohne Wang-ID, weil Tiled kein Zentrum speichert.
+
+**Browser** (Chromium über Playwright, eigener Datenordner): Tileset im Dialog anlegen; Schlüsselkacheln markiert; „Vorlage vervollständigen“ ergibt 47 gelabelte Kacheln und eine vollständige Testkarte; Kachel-Werkzeug, Name, Klasse und Kollision speichern; Terrain-Widget erzeugt „1 von 47 Kombinationen fehlen“; acht Geisterkacheln und ein Strich über den rechten Rand, der links weiterläuft; Versatz ½ nur innerhalb der gewählten Kachel; Tiled- und Godot-Download mit Extrude; Leinwand um eine Kachelspalte erweitert, Metadaten folgen. Keine Seiten- oder Konsolenfehler.
+
+**Nicht geprüft:** Import in Tiled selbst (nur über den Parser), Unity-Import des Manifests und ein realer Agentenauftrag für ein Tileset.
+
+## Ergänzung: Editor-Grundfunktionen
+
+Am 17. Oktober 2026 bestanden **197 Tests in 13 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neue Tests decken Auswahlmasken im Engine-Scope, Kontur-, Polygon- und Palettenoptionen, `merge_layers`, `resize_canvas` (einschließlich Assetgröße, Wiederherstellen und MCP), skalierte PNG-/Sheet-Exporte, Palettendateien sowie die Editor-Helfer für Auswahl, Zwischenablage, Pinsel, Muster und Schattieren ab.
+
+**Browser** (Chromium über Playwright, separater Dienst mit eigenem Datenordner): Pinsel 3 px malt 3×3, runder Radierer löscht ein Plus; gefülltes Rechteck mit Schachbrettmuster; Polygon per Enter; Zauberstab plus `Entf`; Lasso begrenzt den Fülleimer; Freiform verschieben; `Strg+A`, `Strg+C`, `Strg+Umschalt+V` als pixelgleiche neue Ebene; Zusammenführen; Schattieren; Zweitfarbe per Rechtsklick und `X`; Kontur; Farbe ersetzen; Leinwand auf 20×16 und „Auf Inhalt zuschneiden“; PNG-Export 4×; GPL-Export; HEX-Import mit „Pixel zuordnen“; Referenzbild; ein fremdes PNG aus der System-Zwischenablage (zwei neue Farben angehängt, mittig platziert, bei voller Palette angenähert). Keine Seiten- oder Konsolenfehler.
+
+**Nicht geprüft:** Zwischenablage in Firefox und Safari, Import des skalierten Sheet-JSON in einer Engine und ein realer Agentenauftrag mit den neuen Operationen.
+
 ## Ergänzung: KI-Effizienz und Animation
 
 Umgesetzt nach dem [Implementierungsplan](animation-plan.md). Am 17. Oktober 2026 bestanden **164 Tests in 10 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu geprüft sind unter anderem: `rows`/`read_pixels` verlustfrei, Frames mit Scope-Nachweis, Pixelorama-Tag-Regeln, alte Dokumente/Replays/Bundles als ein Frame, Sheet-Inspektion mit Onion und Frame-Abdeckung für `completed`, Sheet-/Aseprite-/Unity-/GIF-Export sowie Sheet-Re-Import.
