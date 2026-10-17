@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
@@ -10,7 +11,7 @@ import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
 import { renderPng, importPng, unityManifest } from './images.js';
 import * as schema from './contracts.js';
-import type { McpStatus } from './types.js';
+import type { McpAgent, McpStatus } from './types.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export async function createApp(options: { databasePath?: string; dataDir?: string; port?: number; logger?: boolean } = {}) {
@@ -19,8 +20,26 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   const store = new Store(options.databasePath ?? join(dataDir, 'pixelator.sqlite'));
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 16 * 1024 * 1024 });
   const clients = new Set<import('node:http').ServerResponse>();
-  const mcpStatus: McpStatus = { running: true, endpoint: `http://127.0.0.1:${port}/mcp`, startedAt: new Date().toISOString(), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null };
-  const broadcastMcpStatus = () => { for (const client of clients) client.write(`data: ${JSON.stringify({ type: 'mcp', status: mcpStatus })}\n\n`); };
+  const mcpStatus: McpStatus = { running: true, endpoint: `http://127.0.0.1:${port}/mcp`, startedAt: new Date().toISOString(), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null, agents: { claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null } } };
+  type McpSession = { mcp: ReturnType<typeof createMcpServer>; transport: NodeStreamableHTTPServerTransport; agent: McpAgent | null; lastSeen: number; activeRequests: number; streams: number; closing: boolean };
+  const sessions = new Map<string, McpSession>();
+  const broadcastMcpStatus = () => {
+    for (const agent of Object.values(mcpStatus.agents)) { agent.connected = false; agent.sessions = 0; }
+    for (const session of sessions.values()) {
+      if (!session.agent || session.closing) continue;
+      const agent = mcpStatus.agents[session.agent];
+      agent.connected = true; agent.sessions++;
+      const lastSeen = new Date(session.lastSeen).toISOString();
+      if (!agent.lastSeenAt || lastSeen > agent.lastSeenAt) agent.lastSeenAt = lastSeen;
+    }
+    for (const client of clients) client.write(`data: ${JSON.stringify({ type: 'mcp', status: mcpStatus })}\n\n`);
+  };
+  const expireSessions = async () => {
+    // shortcut: clients without an open stream expire after five idle minutes; their next request must reinitialize.
+    await Promise.all([...sessions.values()].filter(session => !session.activeRequests && !session.streams && Date.now() - session.lastSeen >= 300_000).map(session => session.mcp.close()));
+  };
+  const sessionCleanup = setInterval(() => { void expireSessions().catch(error => app.log.error(error)); }, 10_000);
+  sessionCleanup.unref();
   app.decorate('pixelatorStore', store);
   app.addHook('onRequest', async (request, reply) => {
     const host = request.hostname;
@@ -40,13 +59,17 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     reply.code(formatted.status).send({ error: { code: formatted.code, message: formatted.message } });
   });
   app.get('/api/health', () => ({ ok: true, name: 'Pixelator', version: '0.1.0', mode: 'external-agent', dataDir }));
-  app.get('/api/mcp/status', (_request, reply) => reply.header('Cache-Control', 'no-store').send(mcpStatus));
-  app.post('/api/mcp/:action', (request, reply) => {
+  app.get('/api/mcp/status', async (_request, reply) => { await expireSessions(); return reply.header('Cache-Control', 'no-store').send(mcpStatus); });
+  app.post('/api/mcp/:action', async (request, reply) => {
     const { action } = z.object({ action: z.enum(['start', 'stop']) }).parse(request.params);
     const running = action === 'start';
     if (running !== mcpStatus.running) {
       mcpStatus.running = running;
       mcpStatus.startedAt = running ? new Date().toISOString() : null;
+      if (!running) {
+        for (const session of sessions.values()) session.closing = true;
+        await Promise.all([...sessions.values()].filter(session => !session.activeRequests).map(session => session.mcp.close()));
+      }
       broadcastMcpStatus();
     }
     return reply.header('Cache-Control', 'no-store').send(mcpStatus);
@@ -104,32 +127,54 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     reply.raw.on('close', () => { clearInterval(heartbeat); clients.delete(reply.raw); });
   });
   store.on('change', event => { for (const client of clients) client.write(`data: ${JSON.stringify(event)}\n\n`); });
-  app.post('/mcp', async (request, reply) => {
-    if (!mcpStatus.running) {
+  app.route({ method: ['POST', 'GET', 'DELETE'], url: '/mcp', handler: async (request, reply) => {
+    if (!mcpStatus.running && request.method !== 'DELETE') {
       const id = z.object({ id: z.union([z.string(), z.number()]).optional() }).passthrough().safeParse(request.body);
       return reply.code(503).send({ jsonrpc: '2.0', id: id.success ? id.data.id ?? null : null, error: { code: -32000, message: 'Der MCP-Server ist gestoppt. Starte ihn in Pixelator.' } });
     }
-    const mcp = createMcpServer(store, join(dataDir, 'exports'), `http://127.0.0.1:${port}`);
-    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    mcpStatus.requests++;
-    if (typeof request.body === 'object' && request.body !== null && 'method' in request.body && request.body.method === 'tools/call') mcpStatus.toolCalls++;
-    mcpStatus.activeRequests++;
-    mcpStatus.lastRequestAt = new Date().toISOString();
+    await expireSessions();
+    const sessionId = request.headers['mcp-session-id'];
+    if (sessionId !== undefined && typeof sessionId !== 'string') throw new AppError('INVALID_SESSION', 'Ungültige MCP-Sitzung.');
+    let session = sessionId ? sessions.get(sessionId) : undefined;
+    if (sessionId && (!session || session.closing)) return reply.code(404).send({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'MCP-Sitzung beendet. Bitte neu verbinden.' } });
+    if (!session && request.method !== 'POST') return reply.code(405).header('Allow', 'POST').send({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Ohne MCP-Sitzung wird POST verwendet.' } });
+    const method = typeof request.body === 'object' && request.body !== null && 'method' in request.body ? request.body.method : undefined;
+    if (!session) {
+      const mcp = createMcpServer(store, join(dataDir, 'exports'), `http://127.0.0.1:${port}`);
+      const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: method === 'initialize' ? randomUUID : undefined, enableJsonResponse: true, onsessioninitialized: id => { sessions.set(id, created); } });
+      const created: McpSession = { mcp, transport, agent: null, lastSeen: Date.now(), activeRequests: 0, streams: 0, closing: false };
+      mcp.server.onclose = () => { if (transport.sessionId) { sessions.delete(transport.sessionId); broadcastMcpStatus(); } };
+      try { await mcp.connect(transport); } catch (error) { await mcp.close(); throw error; }
+      session = created;
+    }
+    const current = session;
+    const post = request.method === 'POST'; const stream = request.method === 'GET';
+    current.lastSeen = Date.now();
+    if (post) {
+      current.activeRequests++; mcpStatus.requests++; mcpStatus.activeRequests++;
+      if (method === 'tools/call') mcpStatus.toolCalls++;
+      mcpStatus.lastRequestAt = new Date().toISOString();
+    }
+    if (stream) current.streams++;
     broadcastMcpStatus();
     try {
-      await mcp.connect(transport);
       reply.hijack();
-      await transport.handleRequest(request.raw, reply.raw, request.body);
+      await current.transport.handleRequest(request.raw, reply.raw, request.body);
+      if (method === 'initialize') {
+        const name = current.mcp.server.getClientVersion()?.name.toLowerCase();
+        current.agent = name?.includes('claude') ? 'claude' : name?.includes('codex') ? 'codex' : null;
+      }
     } finally {
-      try { await mcp.close(); }
-      finally { mcpStatus.activeRequests--; broadcastMcpStatus(); }
+      if (post) { current.activeRequests--; mcpStatus.activeRequests--; }
+      if (stream) current.streams--;
+      if (!current.transport.sessionId || !current.mcp.server.getClientVersion() || current.closing && !current.activeRequests) await current.mcp.close();
+      broadcastMcpStatus();
     }
-  });
-  app.route({ method: ['GET', 'DELETE'], url: '/mcp', handler: (_request, reply) => reply.code(405).header('Allow', 'POST').send({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Stateless MCP verwendet POST.' } }) });
+  } });
   const webDir = join(root, 'dist', 'web');
   if (existsSync(webDir)) await app.register(fastifyStatic, { root: webDir, index: 'index.html' });
   else app.get('/', (_request, reply) => reply.type('text/html').send('<p>Pixelator läuft. Bitte zuerst <code>npm run build</code> ausführen, um den Editor zu öffnen.</p>'));
-  app.addHook('preClose', async () => { for (const client of clients) client.end(); clients.clear(); });
+  app.addHook('preClose', async () => { clearInterval(sessionCleanup); for (const client of clients) client.end(); clients.clear(); await Promise.all([...sessions.values()].map(session => session.mcp.close())); });
   app.addHook('onClose', async () => { store.close(); });
   return { app, store };
 }

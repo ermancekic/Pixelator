@@ -16,7 +16,7 @@ npm start
 
 Der Prozess bleibt während der Nutzung geöffnet. Anschließend den [Editor](http://127.0.0.1:4317) öffnen. Der [Health-Endpunkt](http://127.0.0.1:4317/api/health) prüft, ob der Service erreichbar ist.
 
-Oben rechts öffnet die MCP-Anzeige ein kleines Statusfenster mit Serverstatus, Editor-Verbindung, Laufzeit, aktiven und gesamten Anfragen, Tool-Anfragen und Endpunkt. **Start** und **Stopp** steuern die MCP-Schnittstelle; der Editor bleibt erreichbar. Stopp blockiert neue MCP-Anfragen, laufende werden abgeschlossen. Der anfragebasierte MCP-Transport meldet Aktivität statt einer dauerhaften Agenten-Verbindung. Beim App-Neustart startet MCP wieder automatisch und die Zähler beginnen bei null.
+Oben rechts öffnet die MCP-Anzeige ein kleines Statusfenster mit Serverstatus, Editor-Verbindung, getrennten Verbindungsanzeigen für **Claude** und **Codex**, Laufzeit, aktiven und gesamten Anfragen, Tool-Anfragen und Endpunkt. Die Agenten werden anhand ihres MCP-Clientnamens bei der Anmeldung erkannt; angezeigt werden ihre offenen MCP-Sitzungen und der letzte Kontakt. Sitzungen ohne offenen Datenstrom verfallen nach fünf Minuten ohne Anfrage und werden beim nächsten Zugriff neu angemeldet. Eine geschlossene App kann bis zum Ablauf dieser Frist noch als verbunden erscheinen. **Start** und **Stopp** steuern die MCP-Schnittstelle; der Editor bleibt erreichbar. Stopp blockiert neue MCP-Anfragen, beendet Sitzungen nach Abschluss ihrer laufenden Anfragen und bewahrt gespeicherte Assets. Beim App-Neustart startet MCP wieder automatisch und die Zähler beginnen bei null.
 
 Die Anwendung speichert Projekte und Revisionen standardmäßig in `data/pixelator.sqlite` im Repository. Mit `PIXELATOR_DATA_DIR` lässt sich ein anderes Datenverzeichnis wählen. Vor einem Backup den Service beenden und das ganze Datenverzeichnis sichern. Installation und Paketdownload benötigen zunächst Netzwerkzugriff; für die Raster-Engine ist kein externer Dienst nötig. Den Service auf dem lokalen Rechner betreiben, nicht öffentlich ins Netz stellen.
 
@@ -110,7 +110,7 @@ Auf macOS funktioniert `Cmd` statt `Strg`. In Textfeldern und Dialogen bleiben n
 
 ## Erster Funktionsumfang
 
-- Einzelne Charaktere, Items, Props und UI-Assets mit 1–64 Pixeln je Dimension, üblich sind 8–64; Front- oder Seitenansicht.
+- Einzelne Charaktere, Items, Props und UI-Assets mit frei einstellbarer Breite und Höhe ab 1 Pixel ohne feste Auflösungsgrenze; Front- oder Seitenansicht. Praktische Grenzen ergeben sich aus Arbeitsspeicher, Browser und Laufzeit. Die HTTP-Anfragelimits bleiben bei 16 MB (Projektimport: 128 MB).
 - Stilvorgaben für 1-Bit, Game Boy, 8-Bit und 16-Bit, eine feste oder bearbeitbare Palette mit höchstens 32 sichtbaren Farben und echter Transparenz auf Index `0`.
 - Benannte Ebenen, präzise Rasteroperationen, begrenzte Änderungsbereiche, Revisionen, Varianten und technische Validierung.
 - Ein gemeinsamer Datenstand für Browser und MCP; verlustfreier PNG-Export, JSON-Dokument und Unity-Export.

@@ -4,7 +4,7 @@ import { AppError } from './store.js';
 import type { PixelDocument } from './types.js';
 
 export function renderPng(document: PixelDocument, scale = 1): Buffer {
-  if (!Number.isInteger(scale) || scale < 1 || scale > 32 || Math.max(document.width, document.height) * scale > 1024) throw new AppError('RENDER_SIZE', 'Zoom muss ganzzahlig sein und die Vorschau darf höchstens 1024 Pixel groß werden.');
+  if (!Number.isInteger(scale) || scale < 1 || scale > 32) throw new AppError('RENDER_SIZE', 'Zoom muss ganzzahlig sein und zwischen 1 und 32 liegen.');
   const rgba = composite(document);
   const png = new PNG({ width: document.width * scale, height: document.height * scale });
   for (let y = 0; y < png.height; y++) for (let x = 0; x < png.width; x++) {
@@ -19,7 +19,7 @@ export function importPng(base64: string, maxColors: number, paletteLocked = fal
   if (bytes.length < 33 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new AppError('PNG_REQUIRED', 'Eine gültige PNG-Datei ist erforderlich.');
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
-  if (width < 1 || height < 1 || width > 64 || height > 64) throw new AppError('PNG_SIZE', 'Importe dürfen höchstens 64×64 Pixel groß sein.');
+  if (width < 1 || height < 1) throw new AppError('PNG_SIZE', 'PNG-Abmessungen müssen positiv sein.');
   let image: PNG;
   try { image = PNG.sync.read(bytes, { checkCRC: true }); }
   catch { throw new AppError('PNG_INVALID', 'Die PNG-Datei konnte nicht verlustfrei gelesen werden.'); }

@@ -113,6 +113,8 @@ export interface ArtistRun {
   createdAt: string;
   updatedAt: string;
 }
+export type McpAgent = 'claude' | 'codex';
+export interface McpAgentStatus { connected: boolean; sessions: number; lastSeenAt: string | null }
 export interface McpStatus {
   running: boolean;
   endpoint: string;
@@ -121,6 +123,7 @@ export interface McpStatus {
   toolCalls: number;
   activeRequests: number;
   lastRequestAt: string | null;
+  agents: Record<McpAgent, McpAgentStatus>;
 }
 export interface CreateAssetInput {
   projectId: string;

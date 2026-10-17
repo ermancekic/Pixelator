@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { PNG } from 'pngjs';
 import { createApp } from '../src/server.js';
@@ -52,6 +52,44 @@ afterEach(async () => {
 });
 
 describe('local REST editing', () => {
+  it('creates, edits and round-trips larger rectangular assets and project defaults', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const updated = await app.inject({ method: 'PATCH', url: `/api/projects/${project.id}`, payload: { style: { ...project.style, width: 128, height: 96 } } });
+    expect(updated.statusCode, updated.body).toBe(200);
+    const created = await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Large prop', type: 'prop' } });
+    expect(created.statusCode, created.body).toBe(200);
+    const detail = created.json<AssetDetail>();
+    expect(detail.revision.document).toMatchObject({ width: 128, height: 96 });
+    const pixels = new Array(128 * 96).fill(0); pixels[80 * 128 + 100] = 1;
+    const edited = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: {
+      expectedRevision: detail.revision.id, requestId: 'large-patch',
+      editScope: { layerIds: ['body'], allowLayerChanges: true },
+      operations: [
+        { op: 'patch', layerId: 'body', x: 0, y: 0, width: 128, height: 96, pixels },
+        { op: 'move', layerId: 'body', dx: -80, dy: -80, rect: { x: 100, y: 80, width: 1, height: 1 } },
+        { op: 'pivot', x: 127.5, y: 96 },
+      ],
+    } });
+    expect(edited.statusCode, edited.body).toBe(200);
+    const painted = edited.json<ApplyResult>().revision.document;
+    expect(painted.layers[0].pixels[20]).toBe(1);
+    expect(painted.layers[0].pixels[80 * 128 + 100]).toBe(0);
+    expect(painted.pivot).toEqual({ x: 127.5, y: 96 });
+    const pngResponse = await app.inject(`/api/assets/${detail.asset.id}/export?format=png`);
+    expect(pngResponse.statusCode).toBe(200);
+    const png = PNG.sync.read(pngResponse.rawPayload);
+    expect([png.width, png.height]).toEqual([128, 96]);
+    expect([...png.data.subarray(20 * 4, 20 * 4 + 4)]).toEqual([15, 56, 15, 255]);
+    const pngImport = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Imported large prop', type: 'prop', pngBase64: pngResponse.rawPayload.toString('base64') } });
+    expect(pngImport.statusCode, pngImport.body).toBe(200);
+    expect(pngImport.json<AssetDetail>().revision.document.layers[0].pixels).toEqual(painted.layers[0].pixels);
+    const bundle = (await app.inject(`/api/assets/${detail.asset.id}/export?format=json`)).json();
+    const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const copies = (await app.inject(`/api/assets?projectId=${imported.json<Project>().id}`)).json<Asset[]>();
+    expect((await app.inject(`/api/assets/${copies[0].id}`)).json<AssetDetail>().revision.document).toEqual(painted);
+  });
+
   it('rejects repeated search parameters and unknown asset types as invalid input', async () => {
     const app = await open(); const { project, detail } = await setup(app);
     for (const query of ['q=a&q=b', 'type=other', `projectId=${project.id}`]) {
@@ -189,7 +227,89 @@ describe('local REST editing', () => {
   });
 });
 
-describe('stateless MCP transport', () => {
+describe('MCP transport', () => {
+  it('creates and edits canvases beyond 4096 pixels per axis and inspects them at a valid default scale', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Wide prop', type: 'prop', width: 5000, height: 2 } });
+    expect(created.isError).not.toBe(true);
+    const detail = created.structuredContent as unknown as AssetDetail;
+    const points = Array.from({ length: 5000 }, (_, x) => [x, 1, 1]);
+    const edited = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'wide-pixels',
+      editScope: { layerIds: ['body'], rect: { x: 0, y: 1, width: 5000, height: 1 } },
+      operations: [{ op: 'pixels', layerId: 'body', points }],
+    } });
+    expect(edited.isError).not.toBe(true);
+    expect(edited.structuredContent).toMatchObject({ diff: { changedPixels: 5000 } });
+    const inspected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: detail.asset.id } });
+    expect(inspected.isError).not.toBe(true);
+    expect(inspected.structuredContent).toMatchObject({ scale: 1, imageWidth: 5000, imageHeight: 2 });
+    const png = PNG.sync.read(Buffer.from(inspected.content.find(content => content.type === 'image')!.data!, 'base64'));
+    expect([...png.data.subarray((5000 + 4999) * 4)]).toEqual([15, 56, 15, 255]);
+  });
+
+  async function connect(app: FastifyInstance, name: string) {
+    const response = await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name, version: '1.0.0' } } } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().error).toBeUndefined();
+    const sessionId = response.headers['mcp-session-id'];
+    expect(sessionId).toEqual(expect.any(String));
+    return { ...mcpHeaders, 'mcp-session-id': sessionId as string };
+  }
+
+  it('tracks Claude and Codex independently, including multiple sessions and explicit disconnects', async () => {
+    const app = await open();
+    const claude = await connect(app, 'claude-code');
+    const codex = await connect(app, 'codex-mcp-client');
+    const secondCodex = await connect(app, 'Codex Desktop');
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents).toEqual({
+      claude: { connected: true, sessions: 1, lastSeenAt: expect.any(String) },
+      codex: { connected: true, sessions: 2, lastSeenAt: expect.any(String) },
+    });
+    const initialized = await app.inject({ method: 'POST', url: '/mcp', headers: codex, payload: { jsonrpc: '2.0', method: 'notifications/initialized' } });
+    expect(initialized.statusCode).toBe(202);
+    const tools = await app.inject({ method: 'POST', url: '/mcp', headers: codex, payload: { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} } });
+    expect(tools.statusCode, tools.body).toBe(200);
+    expect(tools.json().result.tools.length).toBeGreaterThan(0);
+    const { 'content-type': _codexContentType, ...codexDeleteHeaders } = codex;
+    const { 'content-type': _secondCodexContentType, ...secondCodexDeleteHeaders } = secondCodex;
+    expect((await app.inject({ method: 'DELETE', url: '/mcp', headers: codexDeleteHeaders })).statusCode).toBe(200);
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.codex).toMatchObject({ connected: true, sessions: 1 });
+    expect((await app.inject({ method: 'DELETE', url: '/mcp', headers: secondCodexDeleteHeaders })).statusCode).toBe(200);
+    const disconnected = (await app.inject('/api/mcp/status')).json<McpStatus>().agents;
+    expect(disconnected.codex).toMatchObject({ connected: false, sessions: 0, lastSeenAt: expect.any(String) });
+    expect(disconnected.claude.connected).toBe(true);
+    expect((await app.inject({ method: 'POST', url: '/api/mcp/stop' })).json<McpStatus>().agents.claude.connected).toBe(false);
+    await app.inject({ method: 'POST', url: '/api/mcp/start' });
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.claude.connected).toBe(false);
+    expect((await app.inject({ method: 'POST', url: '/mcp', headers: claude, payload: { jsonrpc: '2.0', id: 3, method: 'tools/list' } })).statusCode).toBe(404);
+  });
+
+  it('expires idle client sessions and refreshes the timeout on subsequent requests', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const start = Date.now(); const app = await open();
+      const headers = await connect(app, 'codex_cli_rs');
+      vi.setSystemTime(start + 299_000);
+      expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.codex.connected).toBe(true);
+      await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', id: 2, method: 'ping' } });
+      vi.setSystemTime(start + 598_000);
+      expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.codex.connected).toBe(true);
+      vi.setSystemTime(start + 599_000);
+      expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.codex).toMatchObject({ connected: false, sessions: 0 });
+      expect((await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', id: 3, method: 'ping' } })).statusCode).toBe(404);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not mark an unknown client or a rejected initialization as Claude or Codex', async () => {
+    const app = await open();
+    await connect(app, 'another-client');
+    await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude-code' } } } });
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents).toEqual({
+      claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null },
+    });
+  });
+
   it('streams the initial status, in-flight requests and start/stop changes to the editor', async () => {
     const app = await open();
     await app.listen({ host: '127.0.0.1', port: 0 });
@@ -232,7 +352,7 @@ describe('stateless MCP transport', () => {
     const initialResponse = await app.inject('/api/mcp/status');
     expect(initialResponse.headers['cache-control']).toBe('no-store');
     const initial = initialResponse.json<McpStatus>();
-    expect(initial).toEqual({ running: true, endpoint: 'http://127.0.0.1:4317/mcp', startedAt: expect.any(String), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null });
+    expect(initial).toEqual({ running: true, endpoint: 'http://127.0.0.1:4317/mcp', startedAt: expect.any(String), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null, agents: { claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null } } });
     await rpc(app, 'tools/list', {});
     await rpc(app, 'tools/call', { name: 'list_projects', arguments: {} });
     const beforeStop = (await app.inject('/api/mcp/status')).json<McpStatus>();

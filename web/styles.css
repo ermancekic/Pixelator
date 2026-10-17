@@ -35,6 +35,8 @@
 .mcp-heading{display:flex;align-items:center;gap:12px;margin-bottom:24px}
 .mcp-heading h2{font-size:18px;margin:0 0 4px}.mcp-heading p{font-size:10px;color:#82959e;margin:0}.mcp-heading>.icon-button{margin-left:auto}
 .mcp-connection{display:flex;align-items:center;justify-content:space-between;gap:15px;margin:14px 0;font-size:11px;color:#93a4ac}
+.mcp-agents{border-top:1px solid var(--line);padding:4px 0;margin-top:20px}
+.mcp-agent{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0}.mcp-agent strong{display:block;font-size:12px;font-weight:500;color:var(--text)}.mcp-agent small{display:block;margin-top:5px;font-size:9px;color:#83959e}
 .mcp-stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:22px 0}
 .mcp-stats>div{padding:13px 15px;background:#131a1d;border:1px solid var(--line);border-radius:6px}
 .mcp-stats span{display:block;font-size:10px;color:#83959e;margin-bottom:9px}.mcp-stats strong{font:500 23px 'Space Grotesk',sans-serif;color:var(--text);font-variant-numeric:tabular-nums}

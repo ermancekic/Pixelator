@@ -22,8 +22,22 @@ describe('pixel document validation and composition', () => {
     expect(STYLE_PRESETS['game-boy'].maxColors).toBe(4);
   });
 
-  it.each([0, 65, 2.5, NaN, Infinity])('rejects invalid canvas dimension %s', width => {
+  it.each([0, -1, 2.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('rejects invalid canvas dimension %s', width => {
     expect(() => createDocument({ width, height: 4 })).toThrow('INVALID_SIZE');
+  });
+
+  it('rejects an unsafe total pixel count before allocating the raster', () => {
+    expect(() => createDocument({ width: Number.MAX_SAFE_INTEGER, height: 2 })).toThrow('INVALID_SIZE');
+  });
+
+  it('draws and moves pixels beyond the old canvas, coordinate and point-count limits', () => {
+    const doc = make(5000, 2);
+    const painted = run(doc, [points(Array.from({ length: 5000 }, (_, x) => [x, 0, 1]))]);
+    expect(painted.diff.changedPixels).toBe(5000);
+    const moved = run(painted.document, [{ op: 'move', layerId: 'base', dx: -4999, dy: 1, rect: { x: 4999, y: 0, width: 1, height: 1 } }]);
+    expect(get(moved.document, 0, 1)).toBe(1);
+    expect(get(moved.document, 4999, 0)).toBe(0);
+    expect(moved.validation.valid).toBe(true);
   });
 
   it('enforces binary alpha, palette budget and exact raster lengths', () => {
@@ -93,11 +107,13 @@ describe('deterministic drawing', () => {
     expect(get(doc, 0, 0)).toBe(0);
   });
 
-  it('rejects huge, fractional, off-canvas or malformed point/patch operations', () => {
+  it('rejects unsafe, fractional, off-canvas or malformed point/patch operations', () => {
     expect(() => run(make(), [points([[4, 0, 1]])])).toThrow('OUT_OF_BOUNDS');
     expect(() => run(make(), [points([[0.5, 0, 1]])])).toThrow('INVALID_COORDINATE');
     expect(() => run(make(), [points([[0, 0, 9]])])).toThrow('INVALID_COLOR');
-    expect(() => run(make(), [points(new Array(4097).fill([0, 0, 1]))])).toThrow('INVALID_POINTS');
+    expect(() => run(make(), [points([[Number.MAX_SAFE_INTEGER + 1, 0, 1]])])).toThrow('INVALID_COORDINATE');
+    expect(() => run(make(), [points([])])).toThrow('INVALID_POINTS');
+    expect(() => run(make(), [{ op: 'line', layerId: 'base', x1: 0, y1: 0, x2: Number.MAX_SAFE_INTEGER, y2: 0, color: 0 }])).toThrow('OUT_OF_BOUNDS');
     expect(() => run(make(), [{ op: 'patch', layerId: 'base', x: 0, y: 0, width: 2, height: 2, pixels: [1] }])).toThrow('INVALID_PATCH');
     expect(() => run(make(), [{ op: 'patch', layerId: 'base', x: 0, y: 0, width: 1, height: 1, pixels: new Array(1) }])).toThrow('INVALID_COLOR');
     expect(() => run(make(), [{ op: 'explode' } as unknown as Operation])).toThrow('UNKNOWN_OPERATION');

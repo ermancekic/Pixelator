@@ -58,12 +58,21 @@ describe('lossless PNG input', () => {
     } finally { store.close(); }
   });
 
-  it('rejects non-PNG, corrupted CRC and oversize image input', () => {
+  it('imports images wider and taller than 64 pixels losslessly', () => {
+    const rgba = new Array(128 * 96).fill([255, 0, 0, 255]);
+    const doc = importPng(pngBase64(128, 96, rgba), 2);
+    expect([doc.width, doc.height]).toEqual([128, 96]);
+    expect([...PNG.sync.read(renderPng(doc)).data]).toEqual(rgba.flat());
+  });
+
+  it('rejects non-PNG, corrupted CRC and zero-size image input', () => {
     expect(() => importPng(Buffer.from('not a png').toString('base64'), 2)).toThrow(expect.objectContaining({ code: 'PNG_REQUIRED' }));
     const corrupted = Buffer.from(pngBase64(1, 1, [[255, 0, 0, 255]]), 'base64');
     corrupted[29] ^= 1;
     expect(() => importPng(corrupted.toString('base64'), 2)).toThrow(expect.objectContaining({ code: 'PNG_INVALID' }));
-    expect(() => importPng(pngBase64(65, 1, new Array(65).fill([255, 0, 0, 255])), 2)).toThrow(expect.objectContaining({ code: 'PNG_SIZE' }));
+    const zeroSize = Buffer.from(pngBase64(1, 1, [[255, 0, 0, 255]]), 'base64');
+    zeroSize.writeUInt32BE(0, 16);
+    expect(() => importPng(zeroSize.toString('base64'), 2)).toThrow(expect.objectContaining({ code: 'PNG_SIZE' }));
   });
 });
 
@@ -93,9 +102,14 @@ describe('rendering and Unity coordinates', () => {
       .toThrow(expect.objectContaining({ code: 'RENDER_SIZE' }));
   });
 
-  it('rejects a preview larger than 1024 pixels', () => {
-    expect(() => renderPng(createDocument({ width: 64, height: 64, palette }), 17))
-      .toThrow(expect.objectContaining({ code: 'RENDER_SIZE' }));
+  it('renders native and enlarged PNGs beyond 1024 pixels', () => {
+    const doc = createDocument({ width: 1025, height: 3, palette });
+    doc.layers[0].pixels[1024] = 1;
+    for (const scale of [1, 2]) {
+      const png = PNG.sync.read(renderPng(doc, scale));
+      expect([png.width, png.height]).toEqual([1025 * scale, 3 * scale]);
+      expect([...png.data.subarray(1024 * scale * 4, 1024 * scale * 4 + 4)]).toEqual([255, 0, 0, 255]);
+    }
   });
 
   it.each([

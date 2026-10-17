@@ -26,7 +26,6 @@ export const STYLE_PRESETS: Record<PixelStyle, ProjectStyle> = {
 
 const MAX_LAYERS = 32;
 const MAX_OPERATIONS = 512;
-const MAX_POINTS = 4096;
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
@@ -76,7 +75,7 @@ export function validateDocument(doc: PixelDocument): ValidationReport {
   const report: ValidationReport = { valid: false, issues, colorCount: 0, opaquePixels: 0, boundingBox: null, isolatedPixels: 0 };
   if (!object(doc)) { error('INVALID_DOCUMENT', 'Document must be an object.'); return report; }
   if (doc.schemaVersion !== 1) error('INVALID_SCHEMA', 'schemaVersion must be 1.');
-  if (!integer(doc.width) || doc.width < 1 || doc.width > 64 || !integer(doc.height) || doc.height < 1 || doc.height > 64) error('INVALID_SIZE', 'Canvas dimensions must be integers in 1..64.');
+  if (!integer(doc.width) || doc.width < 1 || !integer(doc.height) || doc.height < 1 || !integer(doc.width * doc.height)) error('INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
   if (!integer(doc.maxColors) || doc.maxColors < 1 || doc.maxColors > 32) error('INVALID_COLOR_LIMIT', 'maxColors must be an integer in 1..32.');
   issues.push(...paletteIssues(doc.palette, integer(doc.maxColors) ? doc.maxColors : 32));
   if (typeof doc.paletteLocked !== 'boolean') error('INVALID_DOCUMENT', 'paletteLocked must be boolean.');
@@ -123,7 +122,7 @@ export function createDocument(input: {
   layers?: { id: string; name: string }[]; pivot?: { x: number; y: number };
 }): PixelDocument {
   requireValue(object(input), 'INVALID_DOCUMENT', 'Document options must be an object.');
-  requireValue(integer(input.width) && input.width >= 1 && input.width <= 64 && integer(input.height) && input.height >= 1 && input.height <= 64, 'INVALID_SIZE', 'Canvas dimensions must be integers in 1..64.');
+  requireValue(integer(input.width) && input.width >= 1 && integer(input.height) && input.height >= 1 && integer(input.width * input.height), 'INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
   const palette = input.palette ?? DEFAULT_PALETTE;
   requireValue(Array.isArray(palette), 'INVALID_PALETTE', 'Palette must be an array.');
   const layerOptions = input.layers ?? [{ id: 'base', name: 'Base' }];
@@ -176,7 +175,7 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
     return value;
   };
   const coordinate = (value: unknown): number => {
-    requireValue(integer(value) && value >= -4096 && value <= 4096, 'INVALID_COORDINATE', 'Coordinates must be bounded integers.');
+    requireValue(integer(value), 'INVALID_COORDINATE', 'Coordinates must be safe integers.');
     return value;
   };
   const write = (layer: PixelLayer, x: number, y: number, value: number) => {
@@ -190,6 +189,7 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
     layer.pixels[index] = value;
   };
   const line = (layer: PixelLayer, x1: number, y1: number, x2: number, y2: number, value: number) => {
+    requireValue(inside(canvas, x1, y1) && inside(canvas, x2, y2), 'OUT_OF_BOUNDS', 'Line endpoints must be inside the canvas.');
     const dx = Math.abs(x2 - x1); const dy = -Math.abs(y2 - y1);
     const sx = x1 < x2 ? 1 : -1; const sy = y1 < y2 ? 1 : -1;
     let error = dx + dy;
@@ -207,7 +207,7 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
     switch (operation.op) {
       case 'pixels': {
         const layer = layerFor(operation.layerId);
-        requireValue(Array.isArray(operation.points) && operation.points.length <= MAX_POINTS, 'INVALID_POINTS', `Pixel batches are limited to ${MAX_POINTS} points.`);
+        requireValue(Array.isArray(operation.points) && operation.points.length > 0, 'INVALID_POINTS', 'Pixel batches must contain at least one point.');
         for (const point of operation.points) {
           requireValue(Array.isArray(point) && point.length === 3, 'INVALID_POINTS', 'A pixel point must contain x, y, color.');
           write(layer, coordinate(point[0]), coordinate(point[1]), color(point[2]));

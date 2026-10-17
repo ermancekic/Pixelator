@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-const coordinate = z.number().int().min(0).max(63);
-const size = z.number().int().min(1).max(64);
-const offset = z.number().int().min(-63).max(63);
+const coordinate = z.number().int().min(0);
+const size = z.number().int().min(1);
+const offset = z.number().int();
 const color = z.number().int().min(0).max(32);
 const id = z.string().min(1).max(100);
 const name = z.string().trim().min(1).max(160);
@@ -20,14 +20,14 @@ export const documentSchema = z.object({
   maxColors: z.number().int().min(1).max(32), paletteLocked: z.boolean(),
   layers: z.array(z.object({
     id, name, visible: z.boolean(), locked: z.boolean(),
-    pixels: z.array(color).max(4096),
+    pixels: z.array(color),
   }).strict()).min(1).max(32),
-  pivot: z.object({ x: z.number().min(0).max(64), y: z.number().min(0).max(64) }).strict(),
+  pivot: z.object({ x: z.number().min(0), y: z.number().min(0) }).strict(),
 }).strict();
 const layerId = id;
 export const operation = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('pixels'), layerId, points: z.array(z.tuple([coordinate, coordinate, color])).min(1).max(4096) }).strict(),
-  z.object({ op: z.literal('patch'), layerId, x: coordinate, y: coordinate, width: size, height: size, pixels: z.array(color).max(4096) }).strict(),
+  z.object({ op: z.literal('pixels'), layerId, points: z.array(z.tuple([coordinate, coordinate, color])).min(1) }).strict(),
+  z.object({ op: z.literal('patch'), layerId, x: coordinate, y: coordinate, width: size, height: size, pixels: z.array(color) }).strict(),
   z.object({ op: z.literal('line'), layerId, x1: coordinate, y1: coordinate, x2: coordinate, y2: coordinate, color }).strict(),
   z.object({ op: z.literal('rect'), layerId, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
   z.object({ op: z.literal('ellipse'), layerId, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
@@ -44,7 +44,7 @@ export const operation = z.discriminatedUnion('op', [
   z.object({ op: z.literal('update_layer'), layerId, name: name.optional(), visible: z.boolean().optional(), locked: z.boolean().optional() }).strict(),
   z.object({ op: z.literal('reorder_layers'), layerIds: z.array(id).min(1).max(32) }).strict(),
   z.object({ op: z.literal('palette'), colors: palette }).strict(),
-  z.object({ op: z.literal('pivot'), x: z.number().min(0).max(64), y: z.number().min(0).max(64) }).strict(),
+  z.object({ op: z.literal('pivot'), x: z.number().min(0), y: z.number().min(0) }).strict(),
 ]);
 export const editScope = z.object({
   layerIds: z.array(id).max(32), rect: rect.optional(),
@@ -78,7 +78,7 @@ export const artistRunImport = runInput.extend({
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
 }).strict();
 export const importPngInput = z.object({
-  projectId: id, name, type: assetType, pngBase64: z.string().min(1).max(1_500_000),
+  projectId: id, name, type: assetType, pngBase64: z.string().min(1),
 }).strict();
 export const revisionImport = z.object({
   id, assetId: id, parentId: id.nullable(), document: documentSchema,

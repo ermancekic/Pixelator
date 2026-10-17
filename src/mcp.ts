@@ -57,7 +57,7 @@ export function createMcpServer(store: Store, exportDir: string, baseUrl: string
       catch (error) { return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: publicError(error) }) }] }; }
     });
   }
-  tool('get_workflow', 'Read and apply the current source-backed Artist Guide, review checklist, workflow and precision rules before every art task.', z.object({}).strict(), () => ({ workflow: WORKFLOW, artistGuide: ARTIST_GUIDE, presets: STYLE_PRESETS, limits: { canvas: '1..64 per axis', opaqueColors: 32, layers: 32, operationsPerBatch: 512, batchesPerRun: 120, correctionRounds: 3, targetMinutes: 10 } }), true);
+  tool('get_workflow', 'Read and apply the current source-backed Artist Guide, review checklist, workflow and precision rules before every art task.', z.object({}).strict(), () => ({ workflow: WORKFLOW, artistGuide: ARTIST_GUIDE, presets: STYLE_PRESETS, limits: { canvas: 'Positive integer dimensions; limited by available memory and runtime', opaqueColors: 32, layers: 32, operationsPerBatch: 512, batchesPerRun: 120, correctionRounds: 3, targetMinutes: 10 } }), true);
   tool('list_projects', 'List local projects and their visual style profiles.', z.object({}).strict(), () => ({ projects: store.listProjects() }), true);
   tool('create_project', 'Create a local project with a consistent style profile.', schema.projectInput, input => store.createProject(input));
   tool('update_project', 'Update project defaults. Existing assets keep their saved style. A full style object is required when changing style.', schema.projectUpdate.extend({ projectId: identifier }), ({ projectId, ...input }) => store.updateProject(projectId, input));
@@ -76,7 +76,7 @@ export function createMcpServer(store: Store, exportDir: string, baseUrl: string
     try {
       const revision = store.getRevision(input.assetId, input.revisionId);
       const { asset } = store.getAsset(input.assetId);
-      const scale = input.scale ?? Math.min(16, Math.floor(512 / Math.max(revision.document.width, revision.document.height)));
+      const scale = input.scale ?? Math.max(1, Math.min(16, Math.floor(512 / Math.max(revision.document.width, revision.document.height))));
       const png = renderPng(revision.document, scale);
       if (input.runId) store.inspected(input.runId, input.assetId, revision.id);
       const summary = { ...revisionSummary(revision), asset: { id: asset.id, name: asset.name, type: asset.type, style: asset.style }, artistGuide: { version: ARTIST_GUIDE.version, uri: ARTIST_GUIDE.uri }, scale, imageWidth: revision.document.width * scale, imageHeight: revision.document.height * scale };
