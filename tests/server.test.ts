@@ -1,0 +1,353 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { PNG } from 'pngjs';
+import { createApp } from '../src/server.js';
+import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, McpStatus, Project } from '../src/types.js';
+
+const apps = new Set<FastifyInstance>();
+const mcpHeaders = {
+  accept: 'application/json, text/event-stream',
+  'content-type': 'application/json',
+  'mcp-protocol-version': '2025-11-25',
+};
+interface ToolResult {
+  isError?: boolean;
+  content: { type: string; text?: string; data?: string; mimeType?: string }[];
+  structuredContent?: Record<string, unknown>;
+}
+async function open() {
+  const { app } = await createApp({ databasePath: ':memory:', logger: false });
+  apps.add(app);
+  return app;
+}
+async function rpc<T>(app: FastifyInstance, method: string, params: unknown, id = 1): Promise<T> {
+  const response = await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id, method, params } });
+  expect(response.statusCode, response.body).toBe(200);
+  const body = response.json<{ jsonrpc: string; id: number; result: T; error?: unknown }>();
+  expect(body).toMatchObject({ jsonrpc: '2.0', id });
+  expect(body.error).toBeUndefined();
+  return body.result;
+}
+async function setup(app: FastifyInstance) {
+  const projectResponse = await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Game assets', preset: 'game-boy' } });
+  expect(projectResponse.statusCode).toBe(200);
+  const project = projectResponse.json<Project>();
+  const assetResponse = await app.inject({
+    method: 'POST', url: '/api/assets',
+    payload: { projectId: project.id, name: 'Knight', type: 'character', width: 8, height: 8, layers: [{ id: 'body', name: 'Body' }, { id: 'sword', name: 'Sword' }] },
+  });
+  expect(assetResponse.statusCode).toBe(200);
+  return { project, detail: assetResponse.json<AssetDetail>() };
+}
+function paint(detail: AssetDetail, requestId = 'paint'): ApplyRequest {
+  return {
+    expectedRevision: detail.revision.id, requestId,
+    editScope: { layerIds: ['body'], rect: { x: 1, y: 1, width: 2, height: 1 } },
+    operations: [{ op: 'pixels', layerId: 'body', points: [[1, 1, 1], [2, 1, 2]] }],
+  };
+}
+afterEach(async () => {
+  await Promise.all([...apps].map(app => app.close()));
+  apps.clear();
+});
+
+describe('local REST editing', () => {
+  it('rejects repeated search parameters and unknown asset types as invalid input', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    for (const query of ['q=a&q=b', 'type=other', `projectId=${project.id}`]) {
+      const response = await app.inject(`/api/assets?projectId=${project.id}&${query}`);
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe('INVALID_INPUT');
+    }
+    const valid = await app.inject(`/api/assets?projectId=${project.id}&q=Knight&type=`);
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json().map((asset: Asset) => asset.id)).toEqual([detail.asset.id]);
+  });
+
+  it('shuts down with an open editor event stream instead of waiting for the browser to disconnect', async () => {
+    const app = await open();
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP');
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/events`, { signal: controller.signal });
+    await response.body!.getReader().read();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([app.close().then(() => 'closed'), new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), 1500); })]);
+      expect(result).toBe('closed');
+    } finally { if (timer) clearTimeout(timer); controller.abort(); }
+  });
+
+  it('restores an exported project larger than 16 MiB while keeping the ordinary request limit', async () => {
+    const { app, store } = await createApp({ databasePath: ':memory:', logger: false });
+    apps.add(app);
+    const project = store.createProject({ name: 'Layered project history' });
+    let detail: AssetDetail = store.createAsset({
+      projectId: project.id, name: 'Layered character', type: 'character', width: 64, height: 64,
+      layers: Array.from({ length: 16 }, (_, index) => ({ id: `part_${index}`, name: `Part ${index}` })),
+    });
+    for (let index = 0; index < 132; index++) {
+      detail = store.apply(detail.asset.id, {
+        expectedRevision: detail.revision.id, requestId: `history_${index}`,
+        editScope: { layerIds: ['part_0'] },
+        operations: [{ op: 'pixels', layerId: 'part_0', points: [[0, 0, index % 2 + 1]] }],
+      });
+    }
+    const exported = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/export` });
+    expect(exported.statusCode).toBe(200);
+    const payload = JSON.stringify({ project: exported.json() });
+    expect(Buffer.byteLength(payload)).toBeGreaterThan(16 * 1024 * 1024);
+    expect(Buffer.byteLength(payload)).toBeLessThan(18 * 1024 * 1024);
+    const imported = await app.inject({ method: 'POST', url: '/api/projects/import', headers: { 'content-type': 'application/json' }, payload });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const copy = store.listAssets(imported.json<Project>().id)[0];
+    expect(store.getAsset(copy.id).revision.document).toEqual(detail.revision.document);
+    expect(store.listRevisions(copy.id)).toHaveLength(133);
+    const ordinary = await app.inject({ method: 'POST', url: '/api/projects', headers: { 'content-type': 'application/json' }, payload });
+    expect(ordinary.statusCode).toBe(413);
+    expect(store.listProjects()).toHaveLength(2);
+  }, 20000);
+
+  it('keeps single-asset exports separate from other assets in the project', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Other asset', type: 'item' } });
+    const exported = await app.inject({ method: 'GET', url: `/api/assets/${detail.asset.id}/export?format=json` });
+    expect(exported.statusCode).toBe(200);
+    expect(exported.json().assets.map((asset: Asset) => asset.id)).toEqual([detail.asset.id]);
+    expect(exported.json().revisions.every((rev: { assetId: string }) => rev.assetId === detail.asset.id)).toBe(true);
+    const wholeProject = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/export` });
+    expect(wholeProject.json().assets).toHaveLength(2);
+  });
+
+  it('returns a client error for malformed JSON without changing stored projects', async () => {
+    const app = await open();
+    const response = await app.inject({ method: 'POST', url: '/api/projects', headers: { 'content-type': 'application/json' }, payload: '{bad-json' });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('INVALID_REQUEST');
+    expect((await app.inject('/api/projects')).json()).toEqual([]);
+  });
+
+  it('creates a project, persists an atomic revision, replays retries and returns exact transparent PNG pixels', async () => {
+    const app = await open();
+    const health = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toMatchObject({ ok: true, name: 'Pixelator', mode: 'external-agent' });
+    const { project, detail } = await setup(app);
+    expect(detail.asset.style).toEqual({ ...project.style, width: 8, height: 8 });
+    const payload = paint(detail);
+    const response = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload });
+    expect(response.statusCode, response.body).toBe(200);
+    const painted = response.json<ApplyResult>();
+    expect(painted.revision.id).not.toBe(detail.revision.id);
+    expect(painted.diff.changedPixels).toBe(2);
+    expect(painted.revision.document.layers[1]).toEqual(detail.revision.document.layers[1]);
+
+    const replay = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toEqual(painted);
+    const stale = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: { ...payload, requestId: 'stale' } });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: 'REVISION_CONFLICT' } });
+    const current = await app.inject({ method: 'GET', url: `/api/assets/${detail.asset.id}` });
+    expect(current.json<AssetDetail>().revision).toEqual(painted.revision);
+    const history = await app.inject({ method: 'GET', url: `/api/assets/${detail.asset.id}/revisions` });
+    expect(history.json()).toHaveLength(2);
+
+    const pngResponse = await app.inject({ method: 'GET', url: `/api/assets/${detail.asset.id}/png` });
+    expect(pngResponse.statusCode).toBe(200);
+    expect(pngResponse.headers['content-type']).toContain('image/png');
+    expect([...pngResponse.rawPayload.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    const png = PNG.sync.read(pngResponse.rawPayload);
+    expect([png.width, png.height]).toEqual([8, 8]);
+    expect([...png.data.subarray((1 * 8 + 1) * 4, (1 * 8 + 1) * 4 + 4)]).toEqual([15, 56, 15, 255]);
+    expect([...png.data.subarray(0, 4)]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('round-trips project history and editable semantic layers through export/import', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const edited = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+    expect(edited.statusCode).toBe(200);
+    const painted = edited.json<ApplyResult>();
+    const exported = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/export` });
+    expect(exported.statusCode).toBe(200);
+    expect(exported.headers['content-disposition']).toContain('attachment;');
+    expect(exported.json()).toMatchObject({ kind: 'pixelator-project', schemaVersion: 1 });
+    const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: exported.json() } });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const copy = imported.json<Project>();
+    expect(copy.id).not.toBe(project.id);
+    expect(copy.style).toEqual(project.style);
+    const listing = await app.inject({ method: 'GET', url: `/api/assets?projectId=${copy.id}` });
+    const assets = listing.json<Asset[]>();
+    expect(assets).toHaveLength(1);
+    expect(assets[0].id).not.toBe(detail.asset.id);
+    const loaded = await app.inject({ method: 'GET', url: `/api/assets/${assets[0].id}` });
+    expect(loaded.json<AssetDetail>().revision.document).toEqual(painted.revision.document);
+    const history = await app.inject({ method: 'GET', url: `/api/assets/${assets[0].id}/revisions` });
+    expect(history.json()).toHaveLength(2);
+  });
+});
+
+describe('stateless MCP transport', () => {
+  it('streams the initial status, in-flight requests and start/stop changes to the editor', async () => {
+    const app = await open();
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected TCP');
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/events`, { signal: controller.signal });
+    const reader = response.body!.getReader(); const decoder = new TextDecoder(); let buffered = '';
+    const nextStatus = async (): Promise<McpStatus> => {
+      while (true) {
+        const end = buffered.indexOf('\n\n');
+        if (end < 0) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error('Event stream closed before status arrived');
+          buffered += decoder.decode(chunk.value, { stream: true });
+          continue;
+        }
+        const frame = buffered.slice(0, end); buffered = buffered.slice(end + 2);
+        if (frame.startsWith('data: ')) {
+          const event = JSON.parse(frame.slice(6));
+          expect(event.type).toBe('mcp');
+          return event.status;
+        }
+      }
+    };
+    try {
+      expect(await nextStatus()).toMatchObject({ running: true, requests: 0, activeRequests: 0 });
+      await rpc(app, 'tools/list', {});
+      expect(await nextStatus()).toMatchObject({ requests: 1, activeRequests: 1 });
+      expect(await nextStatus()).toMatchObject({ requests: 1, activeRequests: 0 });
+      await app.inject({ method: 'POST', url: '/api/mcp/stop' });
+      expect(await nextStatus()).toMatchObject({ running: false });
+      await app.inject({ method: 'POST', url: '/api/mcp/start' });
+      expect(await nextStatus()).toMatchObject({ running: true, requests: 1 });
+    } finally { controller.abort(); }
+  });
+
+  it('reports real request statistics and stops MCP without stopping the editor or losing data', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const initialResponse = await app.inject('/api/mcp/status');
+    expect(initialResponse.headers['cache-control']).toBe('no-store');
+    const initial = initialResponse.json<McpStatus>();
+    expect(initial).toEqual({ running: true, endpoint: 'http://127.0.0.1:4317/mcp', startedAt: expect.any(String), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null });
+    await rpc(app, 'tools/list', {});
+    await rpc(app, 'tools/call', { name: 'list_projects', arguments: {} });
+    const beforeStop = (await app.inject('/api/mcp/status')).json<McpStatus>();
+    expect(beforeStop).toMatchObject({ running: true, requests: 2, toolCalls: 1, activeRequests: 0, lastRequestAt: expect.any(String) });
+
+    const stopped = await app.inject({ method: 'POST', url: '/api/mcp/stop' });
+    expect(stopped.statusCode).toBe(200);
+    expect(stopped.json()).toEqual({ ...beforeStop, running: false, startedAt: null });
+    const blocked = await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'create_project', arguments: { name: 'Blocked' } } } });
+    expect(blocked.statusCode).toBe(503);
+    expect(blocked.json()).toMatchObject({ jsonrpc: '2.0', id: 42, error: { code: -32000 } });
+    expect((await app.inject('/api/projects')).json()).toEqual([project]);
+    expect((await app.inject('/api/health')).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/api/mcp/stop' })).json()).toEqual(stopped.json());
+
+    const restarted = await app.inject({ method: 'POST', url: '/api/mcp/start' });
+    expect(restarted.statusCode).toBe(200);
+    expect(restarted.json()).toMatchObject({ running: true, startedAt: expect.any(String), requests: 2, toolCalls: 1 });
+    expect((await app.inject({ method: 'POST', url: '/api/mcp/start' })).json()).toEqual(restarted.json());
+    await rpc(app, 'tools/call', { name: 'list_projects', arguments: {} });
+    expect((await app.inject('/api/mcp/status')).json()).toMatchObject({ running: true, requests: 3, toolCalls: 2, activeRequests: 0 });
+    expect((await app.inject({ method: 'POST', url: '/api/mcp/restart' })).statusCode).toBe(400);
+    expect((await app.inject('/api/mcp/status')).json()).toMatchObject({ running: true, requests: 3 });
+  });
+
+  it('delivers the same current Artist Guide through workflow, resource and new or resumed artist runs', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const workflow = await rpc<ToolResult>(app, 'tools/call', { name: 'get_workflow', arguments: {} });
+    expect(workflow.isError).not.toBe(true);
+    const guide = workflow.structuredContent!.artistGuide as { version: string; uri: string; text: string };
+    expect(guide).toMatchObject({ version: expect.any(String), uri: 'pixelator://artist-guide', text: expect.any(String) });
+    expect(guide.text.length).toBeGreaterThan(100);
+    const resources = await rpc<{ resources: { uri: string }[] }>(app, 'resources/list', {});
+    expect(resources.resources.map(resource => resource.uri)).toContain(guide.uri);
+    const resource = await rpc<{ contents: { uri: string; text: string }[] }>(app, 'resources/read', { uri: guide.uri });
+    expect(resource.contents).toEqual([{ uri: guide.uri, text: guide.text }]);
+    const run = await rpc<ToolResult>(app, 'tools/call', { name: 'start_run', arguments: { projectId: project.id, assetId: detail.asset.id, prompt: 'Improve the silhouette' } });
+    expect(run.isError).not.toBe(true);
+    expect(run.structuredContent).toMatchObject({ status: 'active', artistGuide: guide });
+    const storedRun = await rpc<ToolResult>(app, 'tools/call', { name: 'get_run', arguments: { runId: run.structuredContent!.id } });
+    expect(storedRun.structuredContent).not.toHaveProperty('artistGuide');
+    const bundle = (await app.inject(`/api/projects/${project.id}/export`)).json();
+    const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
+    expect(imported.statusCode).toBe(200);
+    const interrupted = (await app.inject('/api/runs')).json<ArtistRun[]>().find(r => r.projectId === imported.json<Project>().id)!;
+    expect(interrupted.status).toBe('interrupted');
+    const resumed = await rpc<ToolResult>(app, 'tools/call', { name: 'resume_run', arguments: { runId: interrupted.id } });
+    expect(resumed.isError).not.toBe(true);
+    expect(resumed.structuredContent).toMatchObject({ id: interrupted.id, status: 'active', artistGuide: guide });
+  });
+
+  it('initializes, advertises agent tools and delivers the actual inspected revision as PNG image content', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const edited = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+    const painted = edited.json<ApplyResult>();
+    const initialized = await rpc<{ protocolVersion: string; serverInfo: { name: string } }>(app, 'initialize', {
+      protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'pixelator-integration-test', version: '1.0.0' },
+    });
+    expect(initialized).toMatchObject({ protocolVersion: '2025-11-25', serverInfo: { name: 'pixelator' } });
+    const listing = await rpc<{ tools: { name: string }[] }>(app, 'tools/list', {}, 2);
+    expect(listing.tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['get_workflow', 'apply_operations', 'inspect_asset', 'record_review']));
+    const inspected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: detail.asset.id, revisionId: painted.revision.id, scale: 2 } }, 3);
+    expect(inspected.isError).not.toBe(true);
+    expect(inspected.structuredContent).toMatchObject({ id: painted.revision.id, asset: { id: detail.asset.id, name: 'Knight', style: detail.asset.style }, artistGuide: { uri: 'pixelator://artist-guide' }, scale: 2, imageWidth: 16, imageHeight: 16 });
+    const image = inspected.content.find(content => content.type === 'image');
+    expect(image).toMatchObject({ mimeType: 'image/png' });
+    expect(typeof image?.data).toBe('string');
+    const png = PNG.sync.read(Buffer.from(image!.data!, 'base64'));
+    expect([png.width, png.height]).toEqual([16, 16]);
+    expect([...png.data.subarray((2 * 16 + 2) * 4, (2 * 16 + 2) * 4 + 4)]).toEqual([15, 56, 15, 255]);
+    expect(png.data[3]).toBe(0);
+  });
+
+  it('returns safe tool errors for malformed input and engine rejection without adding a revision', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const malformed = await rpc<ToolResult>(app, 'tools/call', {
+      name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail), operations: [{ op: 'pixels', layerId: 'body', points: [[1, 1, 999]] }] },
+    });
+    expect(malformed.isError).toBe(true);
+    expect(JSON.stringify(malformed)).not.toMatch(/node_modules|\bat [A-Za-z_$]+\s*\(/);
+    const rejected = await rpc<ToolResult>(app, 'tools/call', {
+      name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail, 'outside'), operations: [{ op: 'pixels', layerId: 'body', points: [[9, 1, 1]] }] },
+    }, 2);
+    expect(rejected.isError).toBe(true);
+    const message = rejected.content.find(content => content.type === 'text')!.text!;
+    expect(JSON.parse(message)).toMatchObject({ error: { code: 'OUT_OF_BOUNDS', status: 400 } });
+    expect(message).not.toMatch(/node_modules|engine\.ts|store\.ts/);
+    const current = await app.inject({ method: 'GET', url: `/api/assets/${detail.asset.id}` });
+    expect(current.json()).toEqual(detail);
+    const history = await app.inject({ method: 'GET', url: `/api/assets/${detail.asset.id}/revisions` });
+    expect(history.json()).toHaveLength(1);
+  });
+});
+
+describe('loopback request guards', () => {
+  it.each([
+    { headers: { host: 'attacker.example' }, code: 'HOST_DENIED' },
+    { headers: { origin: 'https://attacker.example' }, code: 'ORIGIN_DENIED' },
+    { headers: { origin: 'null' }, code: 'ORIGIN_DENIED' },
+  ])('rejects $code before a REST or MCP write', async ({ headers, code }) => {
+    const app = await open();
+    const rest = await app.inject({ method: 'POST', url: '/api/projects', headers, payload: { name: 'Rejected' } });
+    expect(rest.statusCode).toBe(403);
+    expect(rest.json()).toMatchObject({ error: { code } });
+    const mcp = await app.inject({
+      method: 'POST', url: '/mcp', headers: { ...mcpHeaders, ...headers },
+      payload: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_project', arguments: { name: 'Rejected' } } },
+    });
+    expect(mcp.statusCode).toBe(403);
+    expect(mcp.json()).toMatchObject({ error: { code } });
+    const stop = await app.inject({ method: 'POST', url: '/api/mcp/stop', headers });
+    expect(stop.statusCode).toBe(403);
+    expect(stop.json()).toMatchObject({ error: { code } });
+    expect((await app.inject('/api/mcp/status')).json()).toMatchObject({ running: true, requests: 0 });
+    const projects = await app.inject({ method: 'GET', url: '/api/projects' });
+    expect(projects.json()).toEqual([]);
+  });
+});
