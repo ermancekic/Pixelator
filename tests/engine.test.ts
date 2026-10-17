@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyOperations, composite, createDocument, DEFAULT_PALETTE, frameView, insertFrameIntoTags, previewOperations, readIndices, removeFrameFromTags, STYLE_PRESETS, upgradeDocument, validateDocument } from '../src/engine.js';
+import { applyOperations, composite, createDocument, DEFAULT_PALETTE, frameView, insertFrameIntoTags, nearestColor, previewOperations, readIndices, removeFrameFromTags, STYLE_PRESETS, upgradeDocument, validateDocument } from '../src/engine.js';
 import type { AnimationTag, EditScope, LegacyPixelDocument, Operation, PixelDocument } from '../src/types.js';
 import { cel, setCel } from './helpers.js';
 
@@ -545,5 +545,174 @@ describe('animation frames and tags', () => {
     expect(() => run(doc, [{ op: 'palette', colors: ['#00000000', '#00FF00', '#0000FF', '#FFFFFF'] }], { layerIds: ['body', 'sword'], frameIds: ['idle_1'], allowPaletteChanges: true })).toThrow('PALETTE_CHANGE_FORBIDDEN');
     const recolored = run(doc, [{ op: 'palette', colors: ['#00000000', '#00FF00', '#0000FF', '#FFFFFF'] }], { layerIds: ['body', 'sword'], allowPaletteChanges: true });
     expect(recolored.diff).toMatchObject({ changedPixels: 1, changedFrames: ['idle_3'] });
+  });
+});
+
+describe('selection masks, canvas size, merging and palette remapping', () => {
+  const full = (doc: PixelDocument, extra: Partial<EditScope> = {}): EditScope => ({ layerIds: doc.layers.map(layer => layer.id), allowLayerChanges: true, allowPaletteChanges: true, allowFrameChanges: true, ...extra });
+  const layered = () => createDocument({ width: 4, height: 4, palette, layers: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }, { id: 'c', name: 'C' }] });
+
+  it('writes only masked pixels and keeps fill, replace and outline inside the mask', () => {
+    const doc = make();
+    const scope: EditScope = { layerIds: ['base'], rect: { x: 0, y: 0, width: 2, height: 2 }, mask: ['#.', '##'] };
+    expect(() => run(doc, [points([[1, 0, 1]])], scope)).toThrow('SCOPE_VIOLATION');
+    const filled = run(doc, [{ op: 'fill', layerId: 'base', x: 0, y: 0, color: 1 }], scope);
+    expect(filled.diff.changedPixels).toBe(3);
+    expect([get(filled.document, 0, 0), get(filled.document, 1, 0), get(filled.document, 0, 1), get(filled.document, 1, 1)]).toEqual([1, 0, 1, 1]);
+    const global = run(doc, [{ op: 'fill', layerId: 'base', x: 0, y: 1, color: 2, contiguous: false }], scope);
+    expect(global.diff.changedPixels).toBe(3);
+    const replaced = run(filled.document, [{ op: 'replace', layerId: 'base', from: 1, to: 2 }], { layerIds: ['base'], rect: { x: 0, y: 0, width: 2, height: 2 }, mask: ['##', '.#'] });
+    expect([get(replaced.document, 0, 0), get(replaced.document, 0, 1), get(replaced.document, 1, 1)]).toEqual([2, 1, 2]);
+    const dot = run(make(5, 5), [points([[2, 2, 1]])]).document;
+    const outlined = run(dot, [{ op: 'outline', layerId: 'base', color: 2 }], { layerIds: ['base'], rect: { x: 1, y: 1, width: 3, height: 1 }, mask: ['#.#'] });
+    expect(outlined.diff.changedPixels).toBe(2);
+    expect(() => run(doc, [points([[0, 0, 1]])], { layerIds: ['base'], mask: ['#'] })).toThrow('INVALID_SCOPE');
+    expect(() => run(doc, [points([[0, 0, 1]])], { layerIds: ['base'], rect: { x: 0, y: 0, width: 2, height: 1 }, mask: ['#'] })).toThrow('INVALID_SCOPE');
+  });
+
+  it('outlines four-neighbor, inside a rect and around the visible composite on another layer', () => {
+    const dot = run(make(5, 5), [points([[2, 2, 1]])]).document;
+    const plus = run(dot, [{ op: 'outline', layerId: 'base', color: 2, corners: false }]).document;
+    expect(cel(plus, 0).filter(color => color === 2)).toHaveLength(4);
+    const half = run(dot, [{ op: 'outline', layerId: 'base', color: 2, rect: { x: 0, y: 0, width: 5, height: 2 } }]).document;
+    expect(cel(half, 0).filter(color => color === 2)).toHaveLength(3);
+    let doc = createDocument({ width: 5, height: 5, palette, layers: [{ id: 'line', name: 'Line' }, { id: 'art', name: 'Art' }] });
+    doc = run(doc, [points([[2, 2, 1]], 'art'), { op: 'outline', layerId: 'line', color: 3, reference: 'composite' }]).document;
+    expect(cel(doc, 0).filter(color => color === 3)).toHaveLength(8);
+    expect(cel(doc, 1).filter(Boolean)).toHaveLength(1);
+  });
+
+  it('draws polygon outlines without filling the interior', () => {
+    const doc = run(make(5, 5), [{ op: 'polygon', layerId: 'base', points: [[0, 0], [4, 0], [4, 4], [0, 4]], color: 1, filled: false }]).document;
+    expect(cel(doc, 0).filter(Boolean)).toHaveLength(16);
+    expect(get(doc, 2, 2)).toBe(0);
+  });
+
+  it('merges visible layers into the lowest one without changing the rendered image', () => {
+    let doc = run(layered(), [points([[0, 0, 1], [1, 0, 1]], 'a'), points([[1, 0, 2]], 'b'), points([[2, 0, 3]], 'c')]).document;
+    const before = composite(doc);
+    const merged = run(doc, [{ op: 'merge_layers', layerIds: ['b', 'a'] }], full(doc));
+    expect(merged.document.layers.map(layer => layer.id)).toEqual(['a', 'c']);
+    expect(cel(merged.document, 0).slice(0, 3)).toEqual([1, 2, 0]);
+    expect([...composite(merged.document)]).toEqual([...before]);
+    expect(() => run(doc, [{ op: 'merge_layers', layerIds: ['a', 'c'] }], full(doc))).toThrow('Visible layers between');
+    doc = run(doc, [{ op: 'update_layer', layerId: 'b', visible: false }], full(doc)).document;
+    const skipping = run(doc, [{ op: 'merge_layers', layerIds: ['a', 'c'] }], full(doc)).document;
+    expect(skipping.layers.map(layer => layer.id)).toEqual(['a', 'b']);
+    expect(() => run(doc, [{ op: 'merge_layers', layerIds: ['a', 'b'] }], full(doc))).toThrow('Only visible layers');
+    expect(() => run(doc, [{ op: 'merge_layers', layerIds: ['a', 'c'] }], { layerIds: ['a', 'b', 'c'] })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    doc.layers[0].locked = true;
+    expect(() => run(doc, [{ op: 'merge_layers', layerIds: ['a', 'c'] }], full(doc))).toThrow('LAYER_LOCKED');
+  });
+
+  it('merges every frame of an animation', () => {
+    let doc = createDocument({ width: 2, height: 1, palette, layers: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], frames: [{ id: 'f1' }, { id: 'f2' }] });
+    doc = run(doc, [points([[0, 0, 1]], 'a', 'f1'), points([[1, 0, 2]], 'b', 'f2')]).document;
+    const merged = run(doc, [{ op: 'merge_layers', layerIds: ['a', 'b'] }], full(doc)).document;
+    expect(merged.frames.map(frame => frame.cels.a)).toEqual([[1, 0], [0, 2]]);
+    expect(Object.keys(merged.frames[1].cels)).toEqual(['a']);
+  });
+
+  it('pads, crops and shifts every layer and frame, moving the pivot', () => {
+    let doc = createDocument({ width: 3, height: 2, palette, frames: [{ id: 'f1' }, { id: 'f2' }] });
+    doc = run(doc, [points([[0, 0, 1], [2, 1, 2]], 'base', 'f1'), points([[1, 1, 3]], 'base', 'f2')]).document;
+    const padded = run(doc, [{ op: 'resize_canvas', width: 5, height: 4, offsetX: 1, offsetY: 1 }], full(doc));
+    expect(padded.document).toMatchObject({ width: 5, height: 4, pivot: { x: 2.5, y: 2 } });
+    expect(padded.document.frames[0].cels.base[1 * 5 + 1]).toBe(1);
+    expect(padded.document.frames[0].cels.base[2 * 5 + 3]).toBe(2);
+    expect(padded.document.frames[1].cels.base[2 * 5 + 2]).toBe(3);
+    expect(padded.diff).toMatchObject({ changedPixels: 40, changedFrames: ['f1', 'f2'], boundingBox: { x: 0, y: 0, width: 5, height: 4 } });
+    const cropped = run(doc, [{ op: 'resize_canvas', width: 2, height: 1, offsetX: -1, offsetY: -1 }], full(doc)).document;
+    expect(cropped.frames.map(frame => frame.cels.base)).toEqual([[0, 2], [3, 0]]);
+    expect(cropped.pivot).toEqual({ x: 0.5, y: 0 });
+    expect(validateDocument(cropped).valid).toBe(true);
+    const drawn = run(doc, [{ op: 'resize_canvas', width: 6, height: 2 }, points([[5, 1, 1]], 'base', 'f2')], full(doc)).document;
+    expect(drawn.frames[1].cels.base[11]).toBe(1);
+    expect(() => run(doc, [{ op: 'resize_canvas', width: 2, height: 2 }], { layerIds: ['base'] })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    expect(() => run(doc, [{ op: 'resize_canvas', width: 0, height: 2 }], full(doc))).toThrow('INVALID_SIZE');
+    doc.layers[0].locked = true;
+    expect(() => run(doc, [{ op: 'resize_canvas', width: 2, height: 2 }], full(doc))).toThrow('LAYER_LOCKED');
+    expect(run(doc, [{ op: 'resize_canvas', width: 4, height: 2 }], full(doc)).document.width).toBe(4);
+  });
+
+  it('remaps pixels to the nearest colors of a new palette and keeps locked layers exact', () => {
+    let doc = createDocument({ width: 3, height: 1, palette, layers: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }] });
+    doc = run(doc, [points([[0, 0, 1], [1, 0, 2], [2, 0, 3]], 'a')]).document;
+    const remapped = run(doc, [{ op: 'palette', colors: ['#00000000', '#F0F0F0', '#EE1010'], remap: 'nearest' }], full(doc)).document;
+    expect(cel(remapped, 0)).toEqual([2, 2, 1]);
+    expect(() => run(doc, [{ op: 'palette', colors: ['#00000000', '#F0F0F0', '#EE1010'] }], full(doc))).toThrow('INVALID_PIXELS');
+    doc.layers[0].locked = true;
+    expect(() => run(doc, [{ op: 'palette', colors: ['#00000000', '#F0F0F0', '#EE1010'], remap: 'nearest' }], full(doc))).toThrow('LAYER_LOCKED');
+    const reordered = run(doc, [{ op: 'palette', colors: ['#00000000', '#FFFFFF', '#0000FF', '#FF0000'], remap: 'nearest' }], full(doc)).document;
+    expect(cel(reordered, 0)).toEqual([3, 2, 1]);
+  });
+
+  it('finds the perceptually nearest opaque palette color', () => {
+    expect(nearestColor('#FE0101', palette)).toBe(1);
+    expect(nearestColor('#000000', ['#00000000', '#101010', '#FFFFFF'])).toBe(1);
+  });
+});
+
+describe('tilesets', () => {
+  const full = (doc: PixelDocument): EditScope => ({ layerIds: doc.layers.map(layer => layer.id), allowLayerChanges: true });
+  const tiled = (columns = 8, rows = 6, size = 2) => createDocument({ width: columns * size, height: rows * size, palette, tileSize: { width: size, height: size } });
+
+  it('sets, validates and removes a tile grid with terrains and per-tile metadata', () => {
+    const doc = make(8, 4);
+    expect(() => run(doc, [{ op: 'tileset', tileWidth: 3, tileHeight: 4 }], full(doc))).toThrow('TILE_GRID');
+    expect(() => run(doc, [{ op: 'tileset', tileWidth: 4, tileHeight: 4 }], { layerIds: ['base'] })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    let next = run(doc, [{ op: 'tileset', tileWidth: 4, tileHeight: 4, terrainMode: 'edge', terrains: [{ name: 'Weg', color: '#aa5500' }] }], full(doc)).document;
+    expect(next.tileset).toEqual({ tileWidth: 4, tileHeight: 4, terrainMode: 'edge', terrains: [{ name: 'Weg', color: '#AA5500' }], tiles: [] });
+    next = run(next, [{ op: 'tile_properties', tiles: [{ id: 1, name: 'Weg', type: 'ground', probability: 0.5, collision: [{ x: 0, y: 2, width: 4, height: 2 }], terrain: [1, 0, 1, 0, 0, 0, 0, 0, 1] }] }], full(next)).document;
+    expect(next.tileset!.tiles).toEqual([{ id: 1, name: 'Weg', type: 'ground', probability: 0.5, collision: [{ x: 0, y: 2, width: 4, height: 2 }], terrain: [1, 0, 1, 0, 0, 0, 0, 0, 1] }]);
+    expect(validateDocument(next).valid).toBe(true);
+    const cleared = run(next, [{ op: 'tile_properties', tiles: [{ id: 1, name: null, collision: null, probability: null, type: null, terrain: null }] }], full(next)).document;
+    expect(cleared.tileset!.tiles).toEqual([]);
+    expect(() => run(next, [{ op: 'tile_properties', tiles: [{ id: 2, name: 'x' }] }], full(next))).toThrow('INVALID_TILE');
+    expect(() => run(next, [{ op: 'tile_properties', tiles: [{ id: 0, terrain: [0, 1, 0, 0, 0, 0, 0, 0, 0] }] }], full(next))).toThrow('INVALID_TILESET');
+    expect(() => run(next, [{ op: 'tile_properties', tiles: [{ id: 0, collision: [{ x: 2, y: 0, width: 3, height: 1 }] }] }], full(next))).toThrow('INVALID_TILESET');
+    const mixed = run(next, [{ op: 'tileset', terrainMode: 'corner', terrains: [] }], full(next)).document;
+    expect(mixed.tileset!.tiles).toEqual([{ id: 1, name: 'Weg', type: 'ground', probability: 0.5, collision: [{ x: 0, y: 2, width: 4, height: 2 }] }]);
+    expect(run(next, [{ op: 'tileset', tileWidth: 2, tileHeight: 2 }], full(next)).document.tileset!.tiles).toEqual([]);
+    expect(run(next, [{ op: 'remove_tileset' }], full(next)).document.tileset).toBeUndefined();
+    expect(() => run(doc, [{ op: 'remove_tileset' }], full(doc))).toThrow('NO_TILESET');
+  });
+
+  it('keeps tile metadata with its pixels when the canvas grows or shrinks by whole tiles', () => {
+    let doc = tiled(2, 2, 2);
+    doc = run(doc, [{ op: 'tile_properties', tiles: [{ id: 1, name: 'b' }, { id: 3, name: 'd' }] }], full(doc)).document;
+    const grown = run(doc, [{ op: 'resize_canvas', width: 6, height: 4, offsetX: 2 }], full(doc)).document;
+    expect(grown.tileset!.tiles).toEqual([{ id: 2, name: 'b' }, { id: 5, name: 'd' }]);
+    const cropped = run(doc, [{ op: 'resize_canvas', width: 2, height: 4, offsetX: -2 }], full(doc)).document;
+    expect(cropped.tileset!.tiles).toEqual([{ id: 0, name: 'b' }, { id: 1, name: 'd' }]);
+    expect(() => run(doc, [{ op: 'resize_canvas', width: 5, height: 4 }], full(doc))).toThrow('TILE_GRID');
+  });
+
+  it('offsets a region with wrap-around', () => {
+    const doc = run(make(4, 1), [points([[0, 0, 1], [3, 0, 2]])]).document;
+    expect(cel(run(doc, [{ op: 'shift', layerId: 'base', dx: 1, dy: 0 }]).document, 0)).toEqual([2, 1, 0, 0]);
+    expect(cel(run(doc, [{ op: 'shift', layerId: 'base', dx: -1, dy: 3, rect: { x: 0, y: 0, width: 2, height: 1 } }]).document, 0)).toEqual([0, 1, 0, 2]);
+  });
+
+  it('completes a blob template from five key tiles and labels it as a mixed terrain', () => {
+    let doc = tiled();
+    // Key tiles as 2x2 tiles in a single color each: single, horizontal, vertical, cross, fill.
+    doc = run(doc, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1122331122', '1122331122'] }]).document;
+    const filled = run(doc, [{ op: 'autotile', layerId: 'base', template: 'blob' }], full(doc));
+    const result = filled.document;
+    expect(result.tileset!.terrainMode).toBe('mixed');
+    expect(result.tileset!.terrains).toEqual([{ name: 'Terrain 1', color: '#6DAA2C' }]);
+    expect(result.tileset!.tiles).toHaveLength(47);
+    expect(result.tileset!.tiles[0]).toEqual({ id: 0, terrain: [0, 0, 0, 0, 0, 0, 0, 0, 1] });
+    expect(validateDocument(result).issues.some(issue => issue.code === 'TERRAIN_INCOMPLETE')).toBe(false);
+    expect(filled.diff.changedPixels).toBeGreaterThan(100);
+    expect(() => run(tiled(7, 6), [{ op: 'autotile', layerId: 'base', template: 'blob' }], full(tiled(7, 6)))).toThrow('TEMPLATE_DOES_NOT_FIT');
+    expect(() => run(tiled(8, 6, 3), [{ op: 'autotile', layerId: 'base', template: 'blob' }], full(tiled(8, 6, 3)))).toThrow('TILE_SIZE');
+    expect(() => run(make(16, 12), [{ op: 'autotile', layerId: 'base', template: 'edge' }], full(make(16, 12)))).toThrow('NO_TILESET');
+    const edge = run(tiled(8, 3), [{ op: 'autotile', layerId: 'base', template: 'edge', y: 1, terrain: 2 }], full(tiled(8, 3))).document;
+    expect(edge.tileset).toMatchObject({ terrainMode: 'edge', terrains: [{ name: 'Terrain 1' }, { name: 'Terrain 2' }] });
+    expect(edge.tileset!.tiles.map(tile => tile.id)).toEqual(Array.from({ length: 16 }, (_, i) => 8 + i));
+    const incomplete = run(result, [{ op: 'tile_properties', tiles: [{ id: 46, terrain: null }] }], full(result)).document;
+    expect(validateDocument(incomplete).issues.find(issue => issue.code === 'TERRAIN_INCOMPLETE')?.message).toContain('1 mixed combinations');
   });
 });

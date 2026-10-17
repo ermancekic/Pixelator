@@ -1,6 +1,8 @@
 import { PNG } from 'pngjs';
 import { composite, createDocument, DEFAULT_FRAME_MS, MAX_FRAMES, readIndices } from './engine.js';
 import { encodeGif } from './gif.js';
+import { renderTerrainMap, terrainMap, tileGrid } from './tiles.js';
+import type { TerrainMap } from './tiles.js';
 import { AppError } from './store.js';
 import type { AnimationTag, PixelDocument } from './types.js';
 
@@ -145,19 +147,19 @@ function exportedTags(document: PixelDocument, frameIds: string[]): AnimationTag
   });
 }
 
-/** Sheet metadata in Aseprite's JSON array format, which common engine importers read. */
-export function sheetManifest(name: string, image: string, document: PixelDocument, layout: SheetLayout) {
+/** Sheet metadata in Aseprite's JSON array format, which common engine importers read; rectangles address the image rendered at scale. */
+export function sheetManifest(name: string, image: string, document: PixelDocument, layout: SheetLayout, scale = 1) {
   const frameIds = layout.cells.map(cell => cell.frameId);
   return {
     frames: layout.cells.map(cell => ({
-      filename: `${name} ${cell.frameId}`, frame: { x: cell.x, y: cell.y, w: cell.width, h: cell.height }, rotated: false, trimmed: false,
-      spriteSourceSize: { x: 0, y: 0, w: cell.width, h: cell.height }, sourceSize: { w: cell.width, h: cell.height }, duration: cell.durationMs,
+      filename: `${name} ${cell.frameId}`, frame: { x: cell.x * scale, y: cell.y * scale, w: cell.width * scale, h: cell.height * scale }, rotated: false, trimmed: false,
+      spriteSourceSize: { x: 0, y: 0, w: cell.width * scale, h: cell.height * scale }, sourceSize: { w: cell.width * scale, h: cell.height * scale }, duration: cell.durationMs,
     })),
     meta: {
-      app: 'https://github.com/ermancekic/Pixelator', version: '0.1.0', image, format: 'RGBA8888', size: { w: layout.width, h: layout.height }, scale: '1',
+      app: 'https://github.com/ermancekic/Pixelator', version: '0.1.0', image, format: 'RGBA8888', size: { w: layout.width * scale, h: layout.height * scale }, scale: String(scale),
       frameTags: exportedTags(document, frameIds).map(({ name, from, to, direction }) => ({ name, from, to, direction })),
       layers: document.layers.map(layer => ({ name: layer.name, opacity: 255, blendMode: 'normal' })),
-      slices: [], pivot: document.pivot,
+      slices: [], pivot: { x: document.pivot.x * scale, y: document.pivot.y * scale },
     },
   };
 }
@@ -242,4 +244,43 @@ export function unitySheetManifest(assetId: string, revisionId: string, name: st
       frames: layout.cells.slice(tag.from, tag.to + 1).map(cell => ({ sprite: spriteName(cell.frameId), durationMs: cell.durationMs })),
     })),
   };
+}
+
+const encode = (width: number, height: number, rgba: Uint8Array | Uint8ClampedArray, scale: number): Buffer => {
+  validScale(scale);
+  const png = new PNG({ width: width * scale, height: height * scale });
+  blit(png, rgba instanceof Uint8Array ? rgba : new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength), width, height, scale);
+  return PNG.sync.write(png);
+};
+
+/** The frame repeated 3×3 so seams at the canvas edges become visible. */
+export function renderWrapPreview(document: PixelDocument, scale = 1, frameId?: string): { png: Buffer; width: number; height: number } {
+  const rgba = composite(document, frameId); const width = document.width * 3; const height = document.height * 3;
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) out.set(rgba.subarray(((y % document.height) * document.width + x % document.width) * 4, ((y % document.height) * document.width + x % document.width) * 4 + 4), (y * width + x) * 4);
+  return { png: encode(width, height, out, scale), width: width * scale, height: height * scale };
+}
+
+/** Tiles separated by a one-pixel gutter in a color outside the palette, to judge every tile on its own. */
+export function renderTileSheet(document: PixelDocument, scale = 1, frameId?: string): { png: Buffer; width: number; height: number; gutterColor: string } {
+  if (!document.tileset) throw new AppError('NO_TILESET', 'Dieses Asset hat kein Kachelraster.');
+  const { tileWidth: tw, tileHeight: th } = document.tileset; const { columns, rows } = tileGrid(document.tileset, document.width, document.height);
+  const width = columns * tw + columns - 1; const height = rows * th + rows - 1; const rgba = composite(document, frameId);
+  const palette = document.palette.map(color => color.toUpperCase()); const gutterColor = GUTTER_CANDIDATES.find(color => !palette.includes(color)) ?? GUTTER_CANDIDATES[0];
+  const out = new Uint8Array(width * height * 4); const gutter = rgb(gutterColor);
+  for (let i = 0; i < width * height; i++) out.set(gutter, i * 4);
+  for (let y = 0; y < document.height; y++) for (let x = 0; x < document.width; x++) {
+    const tx = x + Math.floor(x / tw); const ty = y + Math.floor(y / th);
+    out.set(rgba.subarray((y * document.width + x) * 4, (y * document.width + x) * 4 + 4), (ty * width + tx) * 4);
+  }
+  return { png: encode(width, height, out, scale), width: width * scale, height: height * scale, gutterColor };
+}
+
+/** A sample map painted with the labeled tiles of one terrain; magenta cells mark combinations without a tile. */
+export function renderTerrainPreview(document: PixelDocument, terrain = 1, scale = 1, frameId?: string): { png: Buffer; width: number; height: number; map: TerrainMap } {
+  if (!document.tileset) throw new AppError('NO_TILESET', 'Dieses Asset hat kein Kachelraster.');
+  if (!Number.isInteger(terrain) || terrain < 1 || terrain > document.tileset.terrains.length) throw new AppError('UNKNOWN_TERRAIN', 'Dieses Terrain existiert nicht.');
+  const map = terrainMap(document.tileset, terrain);
+  const image = renderTerrainMap(map, document.tileset, readIndices(document, undefined, frameId), document.palette, document.width);
+  return { png: encode(image.width, image.height, image.rgba, scale), width: image.width * scale, height: image.height * scale, map };
 }

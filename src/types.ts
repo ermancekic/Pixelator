@@ -1,4 +1,4 @@
-export type AssetType = 'character' | 'item' | 'prop' | 'ui';
+export type AssetType = 'character' | 'item' | 'prop' | 'ui' | 'tileset';
 export type PixelStyle = '1-bit' | 'game-boy' | '8-bit' | '16-bit';
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface PixelLayer { id: string; name: string; visible: boolean; locked: boolean }
@@ -8,6 +8,18 @@ export type TagDirection = 'forward' | 'reverse' | 'pingpong';
 /** A named frame range; from/to are zero-based and inclusive. */
 export interface AnimationTag { name: string; from: number; to: number; direction: TagDirection; loop: boolean }
 export type AnimationTagInput = Pick<AnimationTag, 'name' | 'from' | 'to'> & Partial<Pick<AnimationTag, 'direction' | 'loop'>>;
+export type TerrainMode = 'corner' | 'edge' | 'mixed';
+export interface TerrainType { name: string; color: string }
+/**
+ * Metadata of one grid tile; id counts row by row. terrain has nine slots: Tiled's Wang ID order (top, top-right, right,
+ * bottom-right, bottom, bottom-left, left, top-left) plus the center; 0 is unset, n refers to terrains[n - 1].
+ * collision rectangles use pixel coordinates inside the tile.
+ */
+export interface TileInfo { id: number; name?: string; type?: string; probability?: number; collision?: Rect[]; terrain?: number[] }
+/** A tile grid over the whole canvas, one terrain set and per-tile metadata; frames animate every tile together. */
+export interface Tileset { tileWidth: number; tileHeight: number; terrainMode: TerrainMode; terrains: TerrainType[]; tiles: TileInfo[] }
+export type TileInfoInput = { id: number } & { [K in Exclude<keyof TileInfo, 'id'>]?: TileInfo[K] | null };
+export type AutotileTemplate = 'blob' | 'edge' | 'corner';
 export interface PixelDocument {
   schemaVersion: 2;
   width: number;
@@ -19,6 +31,7 @@ export interface PixelDocument {
   frames: PixelFrame[];
   tags: AnimationTag[];
   pivot: { x: number; y: number };
+  tileset?: Tileset;
 }
 /** A layer with the raster of one frame, as drawing and rendering code sees it. */
 export type RasterLayer = PixelLayer & { pixels: number[] };
@@ -38,6 +51,8 @@ export interface ProjectStyle {
   theme: string;
 }
 export interface Project { id: string; name: string; style: ProjectStyle; createdAt: string }
+/** A project with what its overview card shows: asset count, last change and the most recently changed assets. */
+export interface ProjectOverview extends Project { assetCount: number; updatedAt: string; previews: { id: string; name: string; headRevisionId: string }[] }
 export interface Asset {
   id: string;
   projectId: string;
@@ -80,6 +95,8 @@ export interface AssetDetail { asset: Asset; revision: Revision }
 export interface EditScope {
   layerIds: string[];
   rect?: Rect;
+  /** Writable pixels inside rect, one string per row: "#" writable, "." protected. */
+  mask?: string[];
   /** Writable frames; omitted means every frame. */
   frameIds?: string[];
   allowPaletteChanges?: boolean;
@@ -93,13 +110,15 @@ export type Operation =
   | (DrawingBase & { op: 'rows'; x: number; y: number; rows: string[]; mode?: 'replace' | 'over' })
   | (DrawingBase & { op: 'line'; x1: number; y1: number; x2: number; y2: number; color: number })
   | (DrawingBase & { op: 'rect' | 'ellipse'; x: number; y: number; width: number; height: number; color: number; filled?: boolean })
-  | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number })
+  | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number; filled?: boolean })
   | (DrawingBase & { op: 'fill'; x: number; y: number; color: number; reference?: 'layer' | 'composite'; contiguous?: boolean })
   | (DrawingBase & { op: 'move' | 'copy'; dx: number; dy: number; rect?: Rect })
   | (DrawingBase & { op: 'flip'; axis: 'x' | 'y'; rect?: Rect })
   | (DrawingBase & { op: 'rotate'; turns: 1 | 2 | 3; rect?: Rect })
   | (DrawingBase & { op: 'replace'; from: number; to: number; rect?: Rect })
-  | (DrawingBase & { op: 'outline'; color: number })
+  | (DrawingBase & { op: 'outline'; color: number; rect?: Rect; reference?: 'layer' | 'composite'; corners?: boolean })
+  | (DrawingBase & { op: 'shift'; dx: number; dy: number; rect?: Rect })
+  | (DrawingBase & { op: 'autotile'; template: AutotileTemplate; x?: number; y?: number; terrain?: number })
   | (DrawingBase & { op: 'stamp'; sourceLayerId?: string; sourceFrameId?: string; rect?: Rect; dx?: number; dy?: number; mode?: 'over' | 'replace' })
   | { op: 'add_frame'; id: string; index?: number; durationMs?: number }
   | { op: 'duplicate_frame'; frameId: string; id: string; index?: number }
@@ -112,8 +131,13 @@ export type Operation =
   | { op: 'remove_layer'; layerId: string }
   | { op: 'update_layer'; layerId: string; name?: string; visible?: boolean; locked?: boolean }
   | { op: 'reorder_layers'; layerIds: string[] }
-  | { op: 'palette'; colors: string[] }
-  | { op: 'pivot'; x: number; y: number };
+  | { op: 'merge_layers'; layerIds: string[] }
+  | { op: 'resize_canvas'; width: number; height: number; offsetX?: number; offsetY?: number }
+  | { op: 'palette'; colors: string[]; remap?: 'index' | 'nearest' }
+  | { op: 'pivot'; x: number; y: number }
+  | { op: 'tileset'; tileWidth?: number; tileHeight?: number; terrainMode?: TerrainMode; terrains?: TerrainType[] }
+  | { op: 'remove_tileset' }
+  | { op: 'tile_properties'; tiles: TileInfoInput[] };
 export interface ApplyRequest {
   expectedRevision: string;
   requestId: string;
@@ -168,6 +192,8 @@ export interface CreateAssetInput {
   layers?: { id: string; name: string }[];
   frames?: { id: string; durationMs?: number }[];
   animationTags?: AnimationTagInput[];
+  tileWidth?: number;
+  tileHeight?: number;
   sourceAssetId?: string;
   runId?: string;
 }

@@ -34,6 +34,8 @@ Vorhandene Server beibehalten und **Refresh** ausführen. Siehe [Antigravity-MCP
 - `inspect_asset` mit `scales: [1, 8]`: native und vergrößerte Ansicht in einem Aufruf; Animationen als ein Sprite-Sheet, optional mit `onion`.
 - `apply_operations` antwortet kompakt (neue `revisionId`, Diff, Validierung); `response: "full"` liefert die vollständige Zusammenfassung.
 - Animation: `create_asset` mit `frames`/`animationTags`; Operationen `add_frame`, `duplicate_frame`, `remove_frame`, `reorder_frames`, `frame_duration`, `set_tags`, `stamp`; `editScope.frameIds` und `allowFrameChanges`.
-- `export_asset`: `png` (ein Frame), `json`, `unity`, `sheet` (PNG plus Aseprite-kompatibles JSON), `gif` (optional `tag`, `scale`).
+- Bearbeitung: `editScope.mask` (Zeilen aus `#`/`.` im `rect`) begrenzt Schreibzugriffe auf eine Freiform; `merge_layers`, `resize_canvas` (mit `offsetX`/`offsetY`, negativ schneidet zu), `outline` mit `rect`/`reference`/`corners`, `polygon` mit `filled`, `palette` mit `remap: "nearest"`.
+- `export_asset`: `png` (ein Frame), `json`, `unity`, `sheet` (PNG plus Aseprite-kompatibles JSON), `gif` (optional `tag`); `scale` vergrößert PNG, Sheet und GIF.
+- Tiles: `create_asset` mit `type: "tileset"`, `tileWidth`, `tileHeight`; Operationen `tileset`, `tile_properties`, `autotile`, `shift`, `remove_tileset`; `inspect_asset` mit `preview: "tiles" | "wrap" | "terrain"`; `export_asset` mit `tiled`, `godot`, `unity` und `extrude`/`spacing`. Details: [Tiles](tiles.md).
 
 Nach der Einrichtung die MCP-Verbindung im Client neu laden. Vor Zeichenaufträgen `get_workflow` aufrufen; es liefert den [Pixel-Artist-Skill](../skills/pixel-artist/SKILL.md) und den Artist Guide.
