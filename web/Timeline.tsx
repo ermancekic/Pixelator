@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Miniature } from './AssetPreview';
+import { ResizablePanel } from './ResizablePanel';
 import { tagHue, tagLanes, totalDuration } from './animation-helpers';
 import type { LoopMode, OnionSettings } from './animation-helpers';
 import { Icon, IconButton } from './icons';
@@ -24,7 +25,7 @@ export function Timeline({ doc, frameId, playingFrameId, editable, loop, onlyTag
   const lanes = tagLanes(doc.tags); const laneCount = Math.max(0, ...lanes.map(item => item.lane + 1));
   const grid = { gridTemplateColumns: `repeat(${doc.frames.length}, ${CELL}px)` } as CSSProperties;
   const commitDuration = (value: string) => { const durationMs = Number(value); if (Number.isInteger(durationMs) && durationMs >= 10 && durationMs <= 60000 && durationMs !== frame.durationMs) onDuration(durationMs); };
-  return <section className="timeline" aria-label="Timeline">
+  return <ResizablePanel id="timeline" label="Timeline" className="timeline" edge="top" minSize={105} flexiblePanel=".canvas-workspace">
     <div className="timeline-bar">
       <span className="timeline-title"><Icon name="film" size={14}/> Frame {index + 1}/{doc.frames.length}<span className="muted">{totalDuration(doc.frames)} ms</span></span>
       <IconButton icon={playingFrameId ? 'pause' : 'play'} label={playingFrameId ? 'Pause (K)' : 'Abspielen (K)'} active={!!playingFrameId} disabled={doc.frames.length < 2} onClick={onTogglePlay}/>
@@ -55,7 +56,7 @@ export function Timeline({ doc, frameId, playingFrameId, editable, loop, onlyTag
         </button>)}
       </div>
     </div>
-  </section>;
+  </ResizablePanel>;
 }
 
 /** Editable copy of the tag list; frame numbers are shown one-based like the timeline. */

@@ -13,6 +13,7 @@ Lokaler Pixel-Art-Editor mit MCP für Codex, Claude und Antigravity. Benötigt N
 - Zeichensymmetrie und Pixel-Perfect-Stift
 - Paletten und Transparenz
 - Zoom, Handwerkzeug, Raster und Tastenkürzel
+- Größenverstellbare Bereiche mit gespeicherter Fensteraufteilung
 - Vorschau mit 3×3-Kachelung
 - Revisionen, Rückgängig und Wiederholen
 - Asset-Varianten
