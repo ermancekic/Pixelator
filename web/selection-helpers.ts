@@ -1,4 +1,5 @@
 import type { Rect } from '../src/types';
+import { t } from './i18n';
 import type { Point } from './view-helpers';
 
 /** A selection's bounding rectangle plus, for lasso and wand selections, one flag per rect cell (row-major). */
@@ -127,7 +128,7 @@ export function transformSelection(pixels: ArrayLike<number>, width: number, hei
   const { rect } = selection; const source = selection.mask ?? new Uint8Array(rect.width * rect.height).fill(1);
   const turned = 'turns' in transform;
   const target: Rect = turned ? { x: rect.x, y: rect.y, width: rect.height, height: rect.width } : 'dx' in transform ? { ...rect, x: rect.x + transform.dx, y: rect.y + transform.dy } : rect;
-  if (target.x < 0 || target.y < 0 || target.x + target.width > width || target.y + target.height > height) throw new Error('Die Auswahl würde die Leinwand verlassen.');
+  if (target.x < 0 || target.y < 0 || target.x + target.width > width || target.y + target.height > height) throw new Error(t('Die Auswahl würde die Leinwand verlassen.'));
   const result = Array.from(pixels); const mask = new Uint8Array(target.width * target.height);
   if (!copy) for (let y = 0; y < rect.height; y++) for (let x = 0; x < rect.width; x++) if (source[y * rect.width + x]) result[(rect.y + y) * width + rect.x + x] = 0;
   for (let y = 0; y < rect.height; y++) for (let x = 0; x < rect.width; x++) {

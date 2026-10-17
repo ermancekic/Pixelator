@@ -7,9 +7,8 @@ import * as schema from './contracts.js';
 import { applyOperations, createDocument, STYLE_PRESETS, upgradeDocument, validateDocument } from './engine.js';
 import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDiff, PixelDocument, Project, ProjectOverview, Revision, RevisionSummary } from './types.js';
 
-export class AppError extends Error {
-  constructor(public code: string, message: string, public status = 400) { super(message); }
-}
+import { AppError } from './errors.js';
+export { AppError } from './errors.js';
 const newId = (prefix: string) => `${prefix}_${randomUUID()}`;
 const now = () => new Date().toISOString();
 function stable(value: unknown): unknown {
@@ -64,7 +63,7 @@ export class Store extends EventEmitter {
   }
   private read<T>(table: 'projects' | 'assets' | 'revisions' | 'runs', id: string): T {
     const row = this.db.prepare(`SELECT data FROM ${table} WHERE id=?`).get(id) as { data: string } | undefined;
-    if (!row) throw new AppError('NOT_FOUND', `${table}: ${id} wurde nicht gefunden.`, 404);
+    if (!row) throw new AppError('NOT_FOUND', `${table} ${id} was not found.`, 404);
     return JSON.parse(row.data) as T;
   }
   private putAsset(asset: Asset) { this.db.prepare('UPDATE assets SET data=? WHERE id=?').run(JSON.stringify(asset), asset.id); }
@@ -142,7 +141,7 @@ export class Store extends EventEmitter {
   getRevision(assetId: string, revisionId?: string): Revision {
     const id = revisionId ?? this.read<Asset>('assets', assetId).headRevisionId;
     const revision = this.read<Revision>('revisions', id);
-    if (revision.assetId !== assetId) throw new AppError('WRONG_ASSET', 'Die Revision gehört zu einem anderen Asset.');
+    if (revision.assetId !== assetId) throw new AppError('WRONG_ASSET', 'The revision belongs to another asset.');
     return upgradeRevision(revision);
   }
   listRevisions(assetId: string): Revision[] {
@@ -157,15 +156,15 @@ export class Store extends EventEmitter {
     const project = this.getProject(input.projectId);
     if (input.sourceAssetId) this.getAsset(input.sourceAssetId);
     if (input.palette && project.style.paletteLocked && input.palette.some((color, i) => i && !project.style.palette.map(c => c.toUpperCase()).includes(color.toUpperCase()))) {
-      throw new AppError('PALETTE_LOCKED', 'Die Farben müssen in der gesperrten Projektpalette enthalten sein.');
+      throw new AppError('PALETTE_LOCKED', 'Colors must be part of the locked project palette.');
     }
     const width = input.width ?? project.style.width;
     const height = input.height ?? project.style.height;
-    if ((input.tileWidth === undefined) !== (input.tileHeight === undefined)) throw new AppError('INVALID_TILESET', 'tileWidth und tileHeight gehören zusammen.');
+    if ((input.tileWidth === undefined) !== (input.tileHeight === undefined)) throw new AppError('INVALID_TILESET', 'tileWidth and tileHeight go together.');
     const doc = document ?? createDocument({
       width, height, palette: input.palette ?? project.style.palette,
       maxColors: input.maxColors ?? project.style.maxColors, paletteLocked: project.style.paletteLocked,
-      layers: input.layers ?? [{ id: 'body', name: input.type === 'character' ? 'Körper' : 'Basis' }],
+      layers: input.layers ?? [{ id: 'body', name: input.type === 'character' ? 'Body' : 'Base' }],
       frames: input.frames, tags: input.animationTags,
       pivot: { x: width / 2, y: input.type === 'character' ? height : height / 2 },
       ...(input.tileWidth && input.tileHeight ? { tileSize: { width: input.tileWidth, height: input.tileHeight } } : {}),
@@ -179,19 +178,19 @@ export class Store extends EventEmitter {
       style: { ...structuredClone(project.style), width: doc.width, height: doc.height, palette: [...doc.palette], maxColors: doc.maxColors, perspective: input.type === 'character' ? project.style.perspective : 'front' },
       createdAt: timestamp, updatedAt: timestamp,
     };
-    const revision: Revision = { id: asset.headRevisionId, assetId: asset.id, parentId: null, document: doc, label: actor === 'import' ? 'PNG importiert' : 'Asset angelegt', actor, runId: input.runId, operations: [], validation, createdAt: timestamp };
+    const revision: Revision = { id: asset.headRevisionId, assetId: asset.id, parentId: null, document: doc, label: actor === 'import' ? 'PNG imported' : 'Asset created', actor, runId: input.runId, operations: [], validation, createdAt: timestamp };
     this.db.prepare('INSERT INTO assets(id,project_id,data) VALUES(?,?,?)').run(asset.id, asset.projectId, JSON.stringify(asset));
     this.insertRevision(revision);
     if (input.runId) {
       const run = this.requireActiveRun(input.runId);
-      if (run.projectId !== project.id || (run.assetId && run.assetId !== asset.id)) throw new AppError('RUN_ASSET', 'Der Auftrag gehört zu einem anderen Projekt oder Asset.');
+      if (run.projectId !== project.id || (run.assetId && run.assetId !== asset.id)) throw new AppError('RUN_ASSET', 'The run belongs to another project or asset.');
       this.putRun({ ...run, assetId: asset.id, updatedAt: timestamp });
     }
     return { asset, revision };
   }
   createAsset(input: unknown): AssetDetail {
     const parsed = schema.createAssetInput.parse(input);
-    if (parsed.sourceAssetId) throw new AppError('USE_VARIANT', 'Für Kopien bitte create_variant verwenden.');
+    if (parsed.sourceAssetId) throw new AppError('USE_VARIANT', 'Use create_variant for copies.');
     const result = this.transaction(() => this.insertAsset(parsed, undefined, parsed.runId ? 'agent' : 'human'));
     this.changed('asset', result.asset.projectId, result.asset.id);
     return result;
@@ -204,7 +203,7 @@ export class Store extends EventEmitter {
     if (project.style.paletteLocked && validateDocument(doc).valid && isBlank(doc)) {
       doc = { ...doc, palette: [...project.style.palette], maxColors: project.style.maxColors, paletteLocked: true };
     }
-    if (doc.maxColors > project.style.maxColors || doc.palette.slice(1).some(c => project.style.paletteLocked && !project.style.palette.map(p => p.toUpperCase()).includes(c.toUpperCase()))) throw new AppError('PALETTE_LIMIT', 'Das Bild passt nicht zu den Farbregeln des Projekts.');
+    if (doc.maxColors > project.style.maxColors || doc.palette.slice(1).some(c => project.style.paletteLocked && !project.style.palette.map(p => p.toUpperCase()).includes(c.toUpperCase()))) throw new AppError('PALETTE_LIMIT', 'The image does not match the project color rules.');
     const result = this.transaction(() => this.insertAsset(parsed, doc, 'import'));
     this.changed('asset', result.asset.projectId, result.asset.id);
     return result;
@@ -224,7 +223,7 @@ export class Store extends EventEmitter {
   private replay<T>(assetId: string, requestId: string, payload: unknown): T | undefined {
     const row = this.db.prepare('SELECT hash,data FROM requests WHERE id=?').get(`${assetId}:${requestId}`) as { hash: string; data: string } | undefined;
     if (!row) return undefined;
-    if (row.hash !== hash(payload)) throw new AppError('IDEMPOTENCY_CONFLICT', 'Diese requestId wurde bereits mit anderem Inhalt verwendet.', 409);
+    if (row.hash !== hash(payload)) throw new AppError('IDEMPOTENCY_CONFLICT', 'This requestId was already used with different content.', 409);
     const stored = JSON.parse(row.data) as { revisionId?: string; diff?: PixelDiff; revision?: Revision };
     if (stored.revision) return upgradeStored(stored as T);
     // Compact records point at the revision; the asset then had that revision as head, and nothing else on it changes.
@@ -249,17 +248,17 @@ export class Store extends EventEmitter {
       const replay = this.replay<ApplyResult>(assetId, request.requestId, { method: 'apply', ...request });
       if (replay) return replay;
       const { asset, revision: base } = this.getAsset(assetId);
-      if (base.id !== request.expectedRevision) throw new AppError('REVISION_CONFLICT', 'Das Asset wurde inzwischen geändert. Aktuelle Revision neu laden.', 409);
+      if (base.id !== request.expectedRevision) throw new AppError('REVISION_CONFLICT', 'The asset has changed in the meantime. Reload the current revision.', 409);
       let run: ArtistRun | undefined;
       if (request.runId) {
         run = this.requireActiveRun(request.runId);
-        if (run.projectId !== asset.projectId || (run.assetId && run.assetId !== assetId)) throw new AppError('RUN_ASSET', 'Auftrag und Asset passen nicht zusammen.');
-        if (run.batchCount >= 120 || run.reviews.length >= 4) throw new AppError('RUN_LIMIT', 'Das Korrekturbudget ist erreicht. Den vorhandenen Stand prüfen und abschließen.');
+        if (run.projectId !== asset.projectId || (run.assetId && run.assetId !== assetId)) throw new AppError('RUN_ASSET', 'Run and asset do not match.');
+        if (run.batchCount >= 120 || run.reviews.length >= 4) throw new AppError('RUN_LIMIT', 'The correction budget is used up. Review the current state and finish.');
       }
       const applied = applyOperations(base.document, request.operations, request.editScope);
       const revision: Revision = {
         id: newId('rev'), assetId, parentId: base.id, document: applied.document,
-        label: request.label ?? 'Pixel bearbeitet', actor: request.actor ?? 'human', runId: request.runId,
+        label: request.label ?? 'Pixels edited', actor: request.actor ?? 'human', runId: request.runId,
         operations: request.operations, validation: applied.validation, createdAt: now(),
       };
       this.appendRevision(asset, revision);
@@ -278,7 +277,7 @@ export class Store extends EventEmitter {
       const replay = this.replay<AssetDetail>(assetId, request.requestId, payload);
       if (replay) return replay;
       const { asset, revision: current } = this.getAsset(assetId);
-      if (current.id !== request.expectedRevision) throw new AppError('REVISION_CONFLICT', 'Die aktuelle Revision hat sich geändert.', 409);
+      if (current.id !== request.expectedRevision) throw new AppError('REVISION_CONFLICT', 'The current revision has changed.', 409);
       const source = this.getRevision(assetId, request.revisionId);
       const revision: Revision = { ...structuredClone(source), id: newId('rev'), parentId: current.id, actor: 'human', runId: undefined, label: request.label ?? `Wiederhergestellt: ${source.label}`, operations: [], createdAt: now() };
       this.appendRevision(asset, revision);
@@ -294,7 +293,7 @@ export class Store extends EventEmitter {
   startRun(input: unknown): ArtistRun {
     const parsed = schema.runInput.parse(input);
     this.getProject(parsed.projectId);
-    if (parsed.assetId && this.getAsset(parsed.assetId).asset.projectId !== parsed.projectId) throw new AppError('RUN_ASSET', 'Asset und Projekt passen nicht zusammen.');
+    if (parsed.assetId && this.getAsset(parsed.assetId).asset.projectId !== parsed.projectId) throw new AppError('RUN_ASSET', 'Asset and project do not match.');
     const timestamp = now();
     const run: ArtistRun = { ...parsed, id: newId('run'), status: 'active', reviews: [], batchCount: 0, createdAt: timestamp, updatedAt: timestamp };
     this.putRun(run);
@@ -303,13 +302,13 @@ export class Store extends EventEmitter {
   }
   private requireActiveRun(id: string): ArtistRun {
     const run = this.getRun(id);
-    if (run.status !== 'active') throw new AppError('RUN_INACTIVE', `Der Auftrag ist ${run.status}. Erst fortsetzen oder einen neuen Auftrag beginnen.`, 409);
+    if (run.status !== 'active') throw new AppError('RUN_INACTIVE', `The run is ${run.status}. Resume it or begin a new run first.`, 409);
     return run;
   }
   resumeRun(id: string): ArtistRun {
     return this.transaction(() => {
       const run = this.getRun(id);
-      if (run.status !== 'interrupted') throw new AppError('RUN_STATUS', 'Nur unterbrochene Aufträge können fortgesetzt werden.');
+      if (run.status !== 'interrupted') throw new AppError('RUN_STATUS', 'Only interrupted runs can be resumed.');
       const resumed = { ...run, status: 'active' as const, inspectedRevisionId: undefined, inspectedFrameIds: undefined, updatedAt: now() };
       this.putRun(resumed);
       return resumed;
@@ -318,9 +317,9 @@ export class Store extends EventEmitter {
   inspected(runId: string, assetId: string, revisionId: string, frameIds?: string[]) {
     this.transaction(() => {
       const run = this.requireActiveRun(runId);
-      if (run.assetId !== assetId) throw new AppError('RUN_ASSET', 'Das Bild gehört nicht zu diesem Auftrag.');
+      if (run.assetId !== assetId) throw new AppError('RUN_ASSET', 'The image does not belong to this run.');
       const { revision } = this.getAsset(assetId);
-      if (revision.id !== revisionId) throw new AppError('REVISION_CONFLICT', 'Nur die aktuelle Revision kann für den Abschluss inspiziert werden.', 409);
+      if (revision.id !== revisionId) throw new AppError('REVISION_CONFLICT', 'Only the current revision can be inspected for completion.', 409);
       this.putRun({ ...run, inspectedRevisionId: revisionId, inspectedFrameIds: frameIds ?? revision.document.frames.map(frame => frame.id), updatedAt: now() });
     });
   }
@@ -328,8 +327,8 @@ export class Store extends EventEmitter {
     const parsed = schema.reviewInput.parse(input);
     const result = this.transaction(() => {
       const run = this.requireActiveRun(runId);
-      if (run.inspectedRevisionId !== parsed.revisionId || !run.assetId || this.getAsset(run.assetId).revision.id !== parsed.revisionId) throw new AppError('INSPECTION_REQUIRED', 'Zuerst genau die aktuelle Revision mit inspect_asset ansehen.');
-      if (run.reviews.length >= 4) throw new AppError('RUN_LIMIT', 'Maximal eine Erstprüfung und drei Korrekturrunden.');
+      if (run.inspectedRevisionId !== parsed.revisionId || !run.assetId || this.getAsset(run.assetId).revision.id !== parsed.revisionId) throw new AppError('INSPECTION_REQUIRED', 'First look at exactly the current revision with inspect_asset.');
+      if (run.reviews.length >= 4) throw new AppError('RUN_LIMIT', 'At most one first review and three correction rounds.');
       const updated = { ...run, reviews: [...run.reviews, { ...parsed, createdAt: now() }], updatedAt: now() };
       this.putRun(updated);
       return updated;
@@ -341,14 +340,14 @@ export class Store extends EventEmitter {
     const result = this.transaction(() => {
       const run = this.requireActiveRun(id);
       if (status === 'completed') {
-        if (!run.assetId) throw new AppError('ASSET_REQUIRED', 'Dem Auftrag fehlt ein Asset.');
+        if (!run.assetId) throw new AppError('ASSET_REQUIRED', 'The run has no asset.');
         const revision = this.getAsset(run.assetId).revision;
         const review = run.reviews.at(-1);
-        if (run.inspectedRevisionId !== revision.id || review?.revisionId !== revision.id) throw new AppError('REVIEW_REQUIRED', 'Die Endrevision muss angesehen und bewertet werden.');
+        if (run.inspectedRevisionId !== revision.id || review?.revisionId !== revision.id) throw new AppError('REVIEW_REQUIRED', 'The final revision must be inspected and reviewed.');
         // Older runs recorded no frame coverage; they predate animation and inspected their only frame.
         const shown = new Set(run.inspectedFrameIds ?? [revision.document.frames[0].id]);
-        if (revision.document.frames.some(frame => !shown.has(frame.id))) throw new AppError('REVIEW_REQUIRED', 'Bei Animationen muss die letzte Inspektion alle Frames zeigen, zum Beispiel als Sprite-Sheet.');
-        if (!revision.validation.valid || revision.validation.opaquePixels === 0 || review.issues.length) throw new AppError('NEEDS_REVIEW', 'Offene Probleme oder ein leeres Asset erlauben nur needs_review.');
+        if (revision.document.frames.some(frame => !shown.has(frame.id))) throw new AppError('REVIEW_REQUIRED', 'For animations the last inspection must show every frame, for example as a sprite sheet.');
+        if (!revision.validation.valid || revision.validation.opaquePixels === 0 || review.issues.length) throw new AppError('NEEDS_REVIEW', 'Open issues or an empty asset only allow needs_review.');
       }
       const updated = { ...run, status, updatedAt: now() };
       this.putRun(updated);
@@ -372,34 +371,34 @@ export class Store extends EventEmitter {
     const revisionIds = new Set(bundle.revisions.map(revision => revision.id));
     const runs = bundle.runs ?? [];
     const runIds = new Set(runs.map(run => run.id));
-    if (assetIds.size !== bundle.assets.length || revisionIds.size !== bundle.revisions.length || runIds.size !== runs.length) throw new AppError('INVALID_IMPORT', 'Doppelte Asset-, Revisions- oder Auftrags-IDs.');
+    if (assetIds.size !== bundle.assets.length || revisionIds.size !== bundle.revisions.length || runIds.size !== runs.length) throw new AppError('INVALID_IMPORT', 'Duplicate asset, revision or run IDs.');
     const revisionMap = new Map(bundle.revisions.map(revision => [revision.id, revision]));
     createDocument({ ...bundle.project.style, layers: [{ id: 'check', name: 'Check' }] });
     for (const asset of bundle.assets) {
-      if (asset.projectId !== bundle.project.id || !bundle.revisions.some(rev => rev.id === asset.headRevisionId && rev.assetId === asset.id)) throw new AppError('INVALID_IMPORT', 'Ein Asset hat keine gültige Endrevision.');
+      if (asset.projectId !== bundle.project.id || !bundle.revisions.some(rev => rev.id === asset.headRevisionId && rev.assetId === asset.id)) throw new AppError('INVALID_IMPORT', 'An asset has no valid head revision.');
       createDocument({ ...asset.style, layers: [{ id: 'check', name: 'Check' }] });
     }
     for (const revision of bundle.revisions) {
-      if (!assetIds.has(revision.assetId) || (revision.parentId && !bundle.revisions.some(parent => parent.id === revision.parentId && parent.assetId === revision.assetId))) throw new AppError('INVALID_IMPORT', 'Ungültige Revisionszuordnung.');
+      if (!assetIds.has(revision.assetId) || (revision.parentId && !bundle.revisions.some(parent => parent.id === revision.parentId && parent.assetId === revision.assetId))) throw new AppError('INVALID_IMPORT', 'Invalid revision assignment.');
       const report = validateDocument(revision.document);
-      if (!report.valid) throw new AppError('INVALID_IMPORT', 'Die Projektdatei enthält ungültige Rasterdaten.');
-      if (revision.runId && !runs.some(run => run.id === revision.runId && run.assetId === revision.assetId)) throw new AppError('INVALID_IMPORT', 'Ungültige Auftragsreferenz einer Revision.');
+      if (!report.valid) throw new AppError('INVALID_IMPORT', 'The project file contains invalid raster data.');
+      if (revision.runId && !runs.some(run => run.id === revision.runId && run.assetId === revision.assetId)) throw new AppError('INVALID_IMPORT', 'A revision references an invalid run.');
     }
     const checked = new Set<string>();
     for (const revision of bundle.revisions) {
       const path = new Set<string>();
       let cursor: string | null = revision.id;
       while (cursor && !checked.has(cursor)) {
-        if (path.has(cursor)) throw new AppError('INVALID_IMPORT', 'Der Revisionsverlauf enthält einen Zyklus.');
+        if (path.has(cursor)) throw new AppError('INVALID_IMPORT', 'The revision history contains a cycle.');
         path.add(cursor);
         cursor = revisionMap.get(cursor)!.parentId;
       }
       for (const item of path) checked.add(item);
     }
     for (const run of runs) {
-      if (run.projectId !== bundle.project.id || (run.assetId && !assetIds.has(run.assetId))) throw new AppError('INVALID_IMPORT', 'Ungültige Projekt- oder Assetreferenz eines Auftrags.');
+      if (run.projectId !== bundle.project.id || (run.assetId && !assetIds.has(run.assetId))) throw new AppError('INVALID_IMPORT', 'A run references an invalid project or asset.');
       const reviewIds = [...run.reviews.map(review => review.revisionId), ...(run.inspectedRevisionId ? [run.inspectedRevisionId] : [])];
-      if (reviewIds.some(id => !run.assetId || revisionMap.get(id)?.assetId !== run.assetId)) throw new AppError('INVALID_IMPORT', 'Ungültige Review-Revision eines Auftrags.');
+      if (reviewIds.some(id => !run.assetId || revisionMap.get(id)?.assetId !== run.assetId)) throw new AppError('INVALID_IMPORT', 'A run reviews an invalid revision.');
     }
     const project = this.transaction(() => {
       const project: Project = { ...bundle.project, id: newId('project'), name: `${bundle.project.name.slice(0, 151)} (Import)`, createdAt: now() };

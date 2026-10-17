@@ -38,7 +38,7 @@ describe('tileset export', () => {
     expect(pixel(7, 1)).toEqual([0, 255, 0, 255]);
     expect(pixel(7, 7)).toEqual([255, 0, 0, 255]);
     expect(() => tilesetLayout(sample(), { extrude: 5 })).toThrow('Extrude');
-    expect(() => tilesetLayout(createDocument({ width: 2, height: 2 }))).toThrow('Kachelraster');
+    expect(() => tilesetLayout(createDocument({ width: 2, height: 2 }))).toThrow('tile grid');
   });
 
   it('writes Tiled tilesets with properties, collision objects, animations and a Wang set', () => {

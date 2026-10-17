@@ -4,6 +4,8 @@ import { composite, getFrame, readIndices } from '../src/engine';
 import type { PixelDocument } from '../src/types';
 import { onionFrames } from './animation-helpers';
 import type { OnionSettings } from './animation-helpers';
+import { useT } from './i18n';
+import { fitScale } from './view-helpers';
 
 // Documents are immutable; keep only the current document's renders so history does not retain pixel buffers.
 let cachedDocument: PixelDocument | undefined;
@@ -67,29 +69,42 @@ export function paintOnion(canvas: HTMLCanvasElement, doc: PixelDocument, frameI
 }
 
 export const Miniature = memo(function Miniature({ doc, className = '', ...options }: { doc: PixelDocument; className?: string } & PaintOptions) {
-  const ref = useRef<HTMLCanvasElement>(null);
+  const ref = useRef<HTMLCanvasElement>(null); const t = useT();
   useEffect(() => { if (ref.current) paint(ref.current, doc, options); }, [doc, options.frameId, options.layerId, options.thumbnail]);
-  return <canvas ref={ref} className={`miniature ${className}`} aria-label="Asset-Vorschau"/>;
+  return <canvas ref={ref} className={`miniature ${className}`} aria-label={t('Asset-Vorschau')}/>;
 });
 
+const ZOOMS = ['fit', 1, 2, 4, 8] as const;
+type PreviewZoom = typeof ZOOMS[number];
+
 export const AssetPreview = memo(function AssetPreview({ doc, frameId, playing = false }: { doc?: PixelDocument; frameId?: string; playing?: boolean }) {
-  const [scale, setScale] = useState(1);
+  const t = useT();
+  const [zoom, setZoom] = useState<PreviewZoom>('fit');
   const [tiled, setTiled] = useState(false);
   const [background, setBackground] = useState('checker');
+  const viewportRef = useRef<HTMLDivElement>(null); const [box, setBox] = useState({ width: 0, height: 0 });
   useEffect(() => () => {
     if (cachedDocument === doc) { cachedDocument = undefined; rendered = new Map(); }
   }, [doc]);
-  return <ResizablePanel id="preview" label="Vorschau" className="inspector-section preview-section" edge="bottom" minSize={200}>
-    <div className="section-heading"><span>VORSCHAU</span><span className="muted">{doc && doc.frames.length > 1 && `${playing ? '▶ ' : ''}FRAME ${Math.max(0, doc.frames.findIndex(frame => frame.id === frameId)) + 1}/${doc.frames.length} · `}{scale * 100} %</span></div>
+  useEffect(() => {
+    const element = viewportRef.current; if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setBox({ width: entry.contentRect.width, height: entry.contentRect.height }));
+    observer.observe(element); return () => observer.disconnect();
+  }, []);
+  const repeat = tiled ? 3 : 1;
+  const scale = !doc ? 1 : zoom === 'fit' ? fitScale(doc.width * repeat, doc.height * repeat, box.width, box.height) : zoom;
+  const cell = doc ? { width: Math.max(1, Math.round(doc.width * scale)), height: Math.max(1, Math.round(doc.height * scale)) } : { width: 0, height: 0 };
+  return <ResizablePanel id="preview" label={t('Vorschau')} className="inspector-section preview-section" edge="bottom" minSize={200}>
+    <div className="section-heading"><span>{t('VORSCHAU')}</span><span className="muted">{doc && doc.frames.length > 1 && `${playing ? '▶ ' : ''}${t('FRAME')} ${Math.max(0, doc.frames.findIndex(frame => frame.id === frameId)) + 1}/${doc.frames.length} · `}{Math.round(scale * 100)} %</span></div>
     <div className="preview-options">
-      <label>Zoom<select aria-label="Vorschau-Zoom" value={scale} onChange={event => setScale(Number(event.target.value))}>{[1, 2, 4, 8].map(value => <option key={value} value={value}>{value}×</option>)}</select></label>
-      <label>Hintergrund<select aria-label="Vorschau-Hintergrund" value={background} onChange={event => setBackground(event.target.value)}><option value="checker">Schachbrett</option><option value="dark">Dunkel</option><option value="light">Hell</option></select></label>
-      <label className="preview-tile-option"><input type="checkbox" checked={tiled} onChange={event => setTiled(event.target.checked)} disabled={!doc}/> Kacheln 3×3</label>
+      <div className="segmented preview-zoom" role="radiogroup" aria-label={t('Vorschau-Zoom')}>{ZOOMS.map(value => <button key={value} role="radio" aria-checked={zoom === value} className={zoom === value ? 'selected' : ''} title={value === 'fit' ? t('Ganzes Bild einpassen') : undefined} onClick={() => setZoom(value)}>{value === 'fit' ? t('Einpassen') : `${value}×`}</button>)}</div>
+      <label>{t('Hintergrund')}<select aria-label={t('Vorschau-Hintergrund')} value={background} onChange={event => setBackground(event.target.value)}><option value="checker">{t('Schachbrett')}</option><option value="dark">{t('Dunkel')}</option><option value="light">{t('Hell')}</option></select></label>
+      <label className="preview-tile-option"><input type="checkbox" checked={tiled} onChange={event => setTiled(event.target.checked)} disabled={!doc}/> {t('Kacheln 3×3')}</label>
     </div>
-    <div className={`preview-background preview-viewport ${background === 'checker' ? 'checker' : `preview-${background}`}`} tabIndex={0} role="img" aria-label={tiled ? 'Gekachelte Vorschau, 3 mal 3' : 'Asset-Vorschau'}>
-      {doc ? <div className="preview-sheet" style={{ gridTemplateColumns: `repeat(${tiled ? 3 : 1}, ${doc.width * scale}px)`, gridAutoRows: doc.height * scale }}>
-        {Array.from({ length: tiled ? 9 : 1 }, (_, index) => <div key={index} className="preview-cell" style={{ width: doc.width * scale, height: doc.height * scale }}><Miniature doc={doc} frameId={frameId}/></div>)}
-      </div> : <span className="muted">Kein Asset ausgewählt</span>}
+    <div ref={viewportRef} className={`preview-background preview-viewport${zoom === 'fit' ? ' is-fit' : ''} ${background === 'checker' ? 'checker' : `preview-${background}`}`} tabIndex={0} role="img" aria-label={tiled ? t('Gekachelte Vorschau, 3 mal 3') : t('Asset-Vorschau')}>
+      {doc ? <div className="preview-sheet" style={{ gridTemplateColumns: `repeat(${repeat}, ${cell.width}px)`, gridAutoRows: cell.height }}>
+        {Array.from({ length: repeat * repeat }, (_, index) => <div key={index} className={`preview-cell${scale < 1 ? ' smooth' : ''}`} style={{ width: cell.width, height: cell.height }}><Miniature doc={doc} frameId={frameId}/></div>)}
+      </div> : <span className="muted">{t('Kein Asset ausgewählt')}</span>}
     </div>
   </ResizablePanel>;
 });

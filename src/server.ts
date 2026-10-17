@@ -45,14 +45,14 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   app.decorate('pixelatorStore', store);
   app.addHook('onRequest', async (request, reply) => {
     const host = request.hostname;
-    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) return reply.code(403).send({ error: { code: 'HOST_DENIED', message: 'Nur lokaler Zugriff ist erlaubt.' } });
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) return reply.code(403).send({ error: { code: 'HOST_DENIED', message: 'Only local access is allowed.' } });
     const origin = request.headers.origin;
     if (origin) {
       try {
         const parsed = new URL(origin);
         const allowedOrigins = [`http://127.0.0.1:${port}`, `http://localhost:${port}`, 'http://127.0.0.1:5173', 'http://localhost:5173'];
         if (!allowedOrigins.includes(parsed.origin)) throw new Error();
-      } catch { return reply.code(403).send({ error: { code: 'ORIGIN_DENIED', message: 'Diese Browserherkunft ist nicht erlaubt.' } }); }
+      } catch { return reply.code(403).send({ error: { code: 'ORIGIN_DENIED', message: 'This browser origin is not allowed.' } }); }
     }
   });
   app.setErrorHandler((error, _request, reply) => {
@@ -83,7 +83,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   app.patch<{ Params: { id: string } }>('/api/projects/:id', request => store.updateProject(request.params.id, request.body));
   app.delete<{ Params: { id: string } }>('/api/projects/:id', request => store.deleteProject(request.params.id));
   app.get<{ Querystring: { projectId: string; q?: string; type?: string } }>('/api/assets', request => {
-    if (!request.query.projectId) throw new AppError('PROJECT_REQUIRED', 'projectId ist erforderlich.');
+    if (!request.query.projectId) throw new AppError('PROJECT_REQUIRED', 'projectId is required.');
     const input = schema.assetSearch.parse(request.query);
     return store.listAssets(input.projectId, input.q, input.type);
   });
@@ -168,14 +168,14 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   app.route({ method: ['POST', 'GET', 'DELETE'], url: '/mcp', handler: async (request, reply) => {
     if (!mcpStatus.running && request.method !== 'DELETE') {
       const id = z.object({ id: z.union([z.string(), z.number()]).optional() }).passthrough().safeParse(request.body);
-      return reply.code(503).send({ jsonrpc: '2.0', id: id.success ? id.data.id ?? null : null, error: { code: -32000, message: 'Der MCP-Server ist gestoppt. Starte ihn in Pixelator.' } });
+      return reply.code(503).send({ jsonrpc: '2.0', id: id.success ? id.data.id ?? null : null, error: { code: -32000, message: 'The MCP server is stopped. Start it in Pixelator.' } });
     }
     await expireSessions();
     const sessionId = request.headers['mcp-session-id'];
-    if (sessionId !== undefined && typeof sessionId !== 'string') throw new AppError('INVALID_SESSION', 'Ungültige MCP-Sitzung.');
+    if (sessionId !== undefined && typeof sessionId !== 'string') throw new AppError('INVALID_SESSION', 'Invalid MCP session.');
     let session = sessionId ? sessions.get(sessionId) : undefined;
-    if (sessionId && (!session || session.closing)) return reply.code(404).send({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'MCP-Sitzung beendet. Bitte neu verbinden.' } });
-    if (!session && request.method !== 'POST') return reply.code(405).header('Allow', 'POST').send({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Ohne MCP-Sitzung wird POST verwendet.' } });
+    if (sessionId && (!session || session.closing)) return reply.code(404).send({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'MCP session ended. Please reconnect.' } });
+    if (!session && request.method !== 'POST') return reply.code(405).header('Allow', 'POST').send({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Without an MCP session, use POST.' } });
     const method = typeof request.body === 'object' && request.body !== null && 'method' in request.body ? request.body.method : undefined;
     if (!session) {
       const mcp = createMcpServer(store, join(dataDir, 'exports'), `http://127.0.0.1:${port}`);
@@ -211,7 +211,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   } });
   const webDir = join(root, 'dist', 'web');
   if (existsSync(webDir)) await app.register(fastifyStatic, { root: webDir, index: 'index.html' });
-  else app.get('/', (_request, reply) => reply.type('text/html').send('<p>Pixelator läuft. Bitte zuerst <code>npm run build</code> ausführen, um den Editor zu öffnen.</p>'));
+  else app.get('/', (_request, reply) => reply.type('text/html').send('<p>Pixelator is running. Run <code>npm run build</code> first to open the editor.</p>'));
   app.addHook('preClose', async () => { clearInterval(sessionCleanup); for (const client of clients) client.end(); clients.clear(); await Promise.all([...sessions.values()].map(session => session.mcp.close())); });
   app.addHook('onClose', async () => { store.close(); });
   return { app, store };
