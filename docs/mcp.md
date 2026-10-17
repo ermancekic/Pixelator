@@ -28,4 +28,12 @@ Für dieses Repository ist die [Workspace-Konfiguration](../.agents/mcp_config.j
 
 Vorhandene Server beibehalten und **Refresh** ausführen. Siehe [Antigravity-MCP-Dokumentation](https://antigravity.google/docs/mcp).
 
+## Werkzeuge für Agenten
+
+- `rows` (Operation) und `read_pixels`: Raster kompakt als Zeichenzeilen schreiben und lesen (`.` transparent, `1`–`9`, `a`–`w` = Palettenindex 1–32).
+- `inspect_asset` mit `scales: [1, 8]`: native und vergrößerte Ansicht in einem Aufruf; Animationen als ein Sprite-Sheet, optional mit `onion`.
+- `apply_operations` antwortet kompakt (neue `revisionId`, Diff, Validierung); `response: "full"` liefert die vollständige Zusammenfassung.
+- Animation: `create_asset` mit `frames`/`animationTags`; Operationen `add_frame`, `duplicate_frame`, `remove_frame`, `reorder_frames`, `frame_duration`, `set_tags`, `stamp`; `editScope.frameIds` und `allowFrameChanges`.
+- `export_asset`: `png` (ein Frame), `json`, `unity`, `sheet` (PNG plus Aseprite-kompatibles JSON), `gif` (optional `tag`, `scale`).
+
 Nach der Einrichtung die MCP-Verbindung im Client neu laden. Vor Zeichenaufträgen `get_workflow` aufrufen; es liefert den [Pixel-Artist-Skill](../skills/pixel-artist/SKILL.md) und den Artist Guide.

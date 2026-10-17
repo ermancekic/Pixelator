@@ -1,17 +1,30 @@
 export type AssetType = 'character' | 'item' | 'prop' | 'ui';
 export type PixelStyle = '1-bit' | 'game-boy' | '8-bit' | '16-bit';
 export interface Rect { x: number; y: number; width: number; height: number }
-export interface PixelLayer { id: string; name: string; visible: boolean; locked: boolean; pixels: number[] }
+export interface PixelLayer { id: string; name: string; visible: boolean; locked: boolean }
+/** One frame of the animation; cels hold one raster per layer ID. */
+export interface PixelFrame { id: string; durationMs: number; cels: Record<string, number[]> }
+export type TagDirection = 'forward' | 'reverse' | 'pingpong';
+/** A named frame range; from/to are zero-based and inclusive. */
+export interface AnimationTag { name: string; from: number; to: number; direction: TagDirection; loop: boolean }
+export type AnimationTagInput = Pick<AnimationTag, 'name' | 'from' | 'to'> & Partial<Pick<AnimationTag, 'direction' | 'loop'>>;
 export interface PixelDocument {
-  schemaVersion: 1;
+  schemaVersion: 2;
   width: number;
   height: number;
   palette: string[];
   maxColors: number;
   paletteLocked: boolean;
   layers: PixelLayer[];
+  frames: PixelFrame[];
+  tags: AnimationTag[];
   pivot: { x: number; y: number };
 }
+/** A layer with the raster of one frame, as drawing and rendering code sees it. */
+export type RasterLayer = PixelLayer & { pixels: number[] };
+export interface FrameView { width: number; height: number; palette: string[]; layers: RasterLayer[] }
+/** Stored documents written before animation support. */
+export interface LegacyPixelDocument extends Omit<PixelDocument, 'schemaVersion' | 'layers' | 'frames' | 'tags'> { schemaVersion: 1; layers: RasterLayer[] }
 export interface ProjectStyle {
   preset: PixelStyle;
   palette: string[];
@@ -37,7 +50,8 @@ export interface Asset {
   createdAt: string;
   updatedAt: string;
 }
-export interface Issue { code: string; severity: 'error' | 'warning'; message: string; layerId?: string }
+export interface Issue { code: string; severity: 'error' | 'warning'; message: string; layerId?: string; frameId?: string }
+export interface FrameReport { frameId: string; opaquePixels: number; boundingBox: Rect | null }
 export interface ValidationReport {
   valid: boolean;
   issues: Issue[];
@@ -45,8 +59,10 @@ export interface ValidationReport {
   opaquePixels: number;
   boundingBox: Rect | null;
   isolatedPixels: number;
+  frames?: FrameReport[];
 }
-export interface PixelDiff { changedPixels: number; changedLayers: string[]; boundingBox: Rect | null }
+/** changedPixels counts changed (frame, position) pairs; boundingBox covers all frames. */
+export interface PixelDiff { changedPixels: number; changedLayers: string[]; changedFrames: string[]; boundingBox: Rect | null }
 export interface Revision {
   id: string;
   assetId: string;
@@ -64,13 +80,17 @@ export interface AssetDetail { asset: Asset; revision: Revision }
 export interface EditScope {
   layerIds: string[];
   rect?: Rect;
+  /** Writable frames; omitted means every frame. */
+  frameIds?: string[];
   allowPaletteChanges?: boolean;
   allowLayerChanges?: boolean;
+  allowFrameChanges?: boolean;
 }
-type DrawingBase = { layerId: string };
+type DrawingBase = { layerId: string; frameId?: string };
 export type Operation =
   | (DrawingBase & { op: 'pixels'; points: [number, number, number][] })
   | (DrawingBase & { op: 'patch'; x: number; y: number; width: number; height: number; pixels: number[] })
+  | (DrawingBase & { op: 'rows'; x: number; y: number; rows: string[]; mode?: 'replace' | 'over' })
   | (DrawingBase & { op: 'line'; x1: number; y1: number; x2: number; y2: number; color: number })
   | (DrawingBase & { op: 'rect' | 'ellipse'; x: number; y: number; width: number; height: number; color: number; filled?: boolean })
   | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number })
@@ -80,6 +100,13 @@ export type Operation =
   | (DrawingBase & { op: 'rotate'; turns: 1 | 2 | 3; rect?: Rect })
   | (DrawingBase & { op: 'replace'; from: number; to: number; rect?: Rect })
   | (DrawingBase & { op: 'outline'; color: number })
+  | (DrawingBase & { op: 'stamp'; sourceLayerId?: string; sourceFrameId?: string; rect?: Rect; dx?: number; dy?: number; mode?: 'over' | 'replace' })
+  | { op: 'add_frame'; id: string; index?: number; durationMs?: number }
+  | { op: 'duplicate_frame'; frameId: string; id: string; index?: number }
+  | { op: 'remove_frame'; frameId: string }
+  | { op: 'reorder_frames'; frameIds: string[] }
+  | { op: 'frame_duration'; frameIds: string[]; durationMs: number }
+  | { op: 'set_tags'; tags: AnimationTagInput[] }
   | { op: 'add_layer'; id: string; name: string }
   | { op: 'duplicate_layer'; layerId: string; id: string; name: string }
   | { op: 'remove_layer'; layerId: string }
@@ -111,6 +138,8 @@ export interface ArtistRun {
   status: 'active' | 'completed' | 'needs_review' | 'cancelled' | 'interrupted';
   reviews: Review[];
   inspectedRevisionId?: string;
+  /** Frames shown by the latest inspection of inspectedRevisionId. */
+  inspectedFrameIds?: string[];
   batchCount: number;
   createdAt: string;
   updatedAt: string;
@@ -137,6 +166,8 @@ export interface CreateAssetInput {
   palette?: string[];
   maxColors?: number;
   layers?: { id: string; name: string }[];
+  frames?: { id: string; durationMs?: number }[];
+  animationTags?: AnimationTagInput[];
   sourceAssetId?: string;
   runId?: string;
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ROW_PATTERN } from './raster-text.js';
 
 const coordinate = z.number().int().min(0);
 const size = z.number().int().min(1);
@@ -15,41 +16,65 @@ export const projectStyle = z.object({
   width: size, height: size, perspective: z.enum(['front', 'side']),
   lighting: z.string().max(300), outline: z.string().max(300), theme: z.string().max(1000),
 }).strict();
-export const documentSchema = z.object({
+const pivot = z.object({ x: z.number().min(0), y: z.number().min(0) }).strict();
+const durationMs = z.number().int().min(10).max(60000);
+const tagDirection = z.enum(['forward', 'reverse', 'pingpong']);
+export const tagInput = z.object({ name, from: z.number().int().min(0), to: z.number().int().min(0), direction: tagDirection.optional(), loop: z.boolean().optional() }).strict();
+const legacyDocumentSchema = z.object({
   schemaVersion: z.literal(1), width: size, height: size, palette,
   maxColors: z.number().int().min(1).max(32), paletteLocked: z.boolean(),
   layers: z.array(z.object({
     id, name, visible: z.boolean(), locked: z.boolean(),
     pixels: z.array(color),
   }).strict()).min(1).max(32),
-  pivot: z.object({ x: z.number().min(0), y: z.number().min(0) }).strict(),
+  pivot,
 }).strict();
+const documentSchemaV2 = z.object({
+  schemaVersion: z.literal(2), width: size, height: size, palette,
+  maxColors: z.number().int().min(1).max(32), paletteLocked: z.boolean(),
+  layers: z.array(z.object({ id, name, visible: z.boolean(), locked: z.boolean() }).strict()).min(1).max(32),
+  frames: z.array(z.object({ id, durationMs, cels: z.record(z.string(), z.array(color)) }).strict()).min(1).max(64),
+  tags: z.array(z.object({ name, from: z.number().int().min(0), to: z.number().int().min(0), direction: tagDirection, loop: z.boolean() }).strict()).max(32),
+  pivot,
+}).strict();
+/** Accepts documents written before animation support; callers upgrade them with upgradeDocument. */
+export const documentSchema = z.discriminatedUnion('schemaVersion', [legacyDocumentSchema, documentSchemaV2]);
 const layerId = id;
+const frameId = id.optional();
+const draw = { layerId, frameId };
 export const operation = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('pixels'), layerId, points: z.array(z.tuple([coordinate, coordinate, color])).min(1) }).strict(),
-  z.object({ op: z.literal('patch'), layerId, x: coordinate, y: coordinate, width: size, height: size, pixels: z.array(color) }).strict(),
-  z.object({ op: z.literal('line'), layerId, x1: coordinate, y1: coordinate, x2: coordinate, y2: coordinate, color }).strict(),
-  z.object({ op: z.literal('rect'), layerId, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
-  z.object({ op: z.literal('ellipse'), layerId, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
-  z.object({ op: z.literal('polygon'), layerId, points: z.array(z.tuple([coordinate, coordinate])).min(3).max(128), color }).strict(),
-  z.object({ op: z.literal('fill'), layerId, x: coordinate, y: coordinate, color, reference: z.enum(['layer', 'composite']).optional(), contiguous: z.boolean().optional() }).strict(),
-  z.object({ op: z.literal('move'), layerId, dx: offset, dy: offset, rect: rect.optional() }).strict(),
-  z.object({ op: z.literal('copy'), layerId, dx: offset, dy: offset, rect: rect.optional() }).strict(),
-  z.object({ op: z.literal('flip'), layerId, axis: z.enum(['x', 'y']), rect: rect.optional() }).strict(),
-  z.object({ op: z.literal('rotate'), layerId, turns: z.union([z.literal(1), z.literal(2), z.literal(3)]), rect: rect.optional() }).strict(),
-  z.object({ op: z.literal('replace'), layerId, from: color, to: color, rect: rect.optional() }).strict(),
-  z.object({ op: z.literal('outline'), layerId, color }).strict(),
+  z.object({ op: z.literal('pixels'), ...draw, points: z.array(z.tuple([coordinate, coordinate, color])).min(1) }).strict(),
+  z.object({ op: z.literal('patch'), ...draw, x: coordinate, y: coordinate, width: size, height: size, pixels: z.array(color) }).strict(),
+  z.object({ op: z.literal('rows'), ...draw, x: coordinate, y: coordinate, rows: z.array(z.string().regex(ROW_PATTERN, 'Use . for transparent and 1-9, a-w for palette indices 1-32.')).min(1), mode: z.enum(['replace', 'over']).optional() }).strict(),
+  z.object({ op: z.literal('line'), ...draw, x1: coordinate, y1: coordinate, x2: coordinate, y2: coordinate, color }).strict(),
+  z.object({ op: z.literal('rect'), ...draw, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
+  z.object({ op: z.literal('ellipse'), ...draw, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
+  z.object({ op: z.literal('polygon'), ...draw, points: z.array(z.tuple([coordinate, coordinate])).min(3).max(128), color }).strict(),
+  z.object({ op: z.literal('fill'), ...draw, x: coordinate, y: coordinate, color, reference: z.enum(['layer', 'composite']).optional(), contiguous: z.boolean().optional() }).strict(),
+  z.object({ op: z.literal('move'), ...draw, dx: offset, dy: offset, rect: rect.optional() }).strict(),
+  z.object({ op: z.literal('copy'), ...draw, dx: offset, dy: offset, rect: rect.optional() }).strict(),
+  z.object({ op: z.literal('flip'), ...draw, axis: z.enum(['x', 'y']), rect: rect.optional() }).strict(),
+  z.object({ op: z.literal('rotate'), ...draw, turns: z.union([z.literal(1), z.literal(2), z.literal(3)]), rect: rect.optional() }).strict(),
+  z.object({ op: z.literal('replace'), ...draw, from: color, to: color, rect: rect.optional() }).strict(),
+  z.object({ op: z.literal('outline'), ...draw, color }).strict(),
+  z.object({ op: z.literal('stamp'), ...draw, sourceLayerId: id.optional(), sourceFrameId: id.optional(), rect: rect.optional(), dx: offset.optional(), dy: offset.optional(), mode: z.enum(['over', 'replace']).optional() }).strict(),
   z.object({ op: z.literal('add_layer'), id, name }).strict(),
   z.object({ op: z.literal('duplicate_layer'), layerId, id, name }).strict(),
   z.object({ op: z.literal('remove_layer'), layerId }).strict(),
   z.object({ op: z.literal('update_layer'), layerId, name: name.optional(), visible: z.boolean().optional(), locked: z.boolean().optional() }).strict(),
   z.object({ op: z.literal('reorder_layers'), layerIds: z.array(id).min(1).max(32) }).strict(),
+  z.object({ op: z.literal('add_frame'), id, index: z.number().int().min(0).optional(), durationMs: durationMs.optional() }).strict(),
+  z.object({ op: z.literal('duplicate_frame'), frameId: id, id, index: z.number().int().min(0).optional() }).strict(),
+  z.object({ op: z.literal('remove_frame'), frameId: id }).strict(),
+  z.object({ op: z.literal('reorder_frames'), frameIds: z.array(id).min(1).max(64) }).strict(),
+  z.object({ op: z.literal('frame_duration'), frameIds: z.array(id).min(1).max(64), durationMs }).strict(),
+  z.object({ op: z.literal('set_tags'), tags: z.array(tagInput).max(32) }).strict(),
   z.object({ op: z.literal('palette'), colors: palette }).strict(),
   z.object({ op: z.literal('pivot'), x: z.number().min(0), y: z.number().min(0) }).strict(),
 ]);
 export const editScope = z.object({
-  layerIds: z.array(id).max(32), rect: rect.optional(),
-  allowPaletteChanges: z.boolean().optional(), allowLayerChanges: z.boolean().optional(),
+  layerIds: z.array(id).max(32), rect: rect.optional(), frameIds: z.array(id).min(1).max(64).optional(),
+  allowPaletteChanges: z.boolean().optional(), allowLayerChanges: z.boolean().optional(), allowFrameChanges: z.boolean().optional(),
 }).strict();
 export const applyRequest = z.object({
   expectedRevision: id, requestId: id, label: z.string().max(300).optional(),
@@ -61,6 +86,8 @@ export const createAssetInput = z.object({
   width: size.optional(), height: size.optional(), palette: palette.optional(),
   maxColors: z.number().int().min(1).max(32).optional(),
   layers: z.array(z.object({ id, name }).strict()).min(1).max(32).optional(),
+  frames: z.array(z.object({ id, durationMs: durationMs.optional() }).strict()).min(1).max(64).optional(),
+  animationTags: z.array(tagInput).max(32).optional(),
   sourceAssetId: id.optional(), runId: id.optional(),
 }).strict();
 export const projectInput = z.object({ name, preset: preset.optional() }).strict();
@@ -75,12 +102,13 @@ export const reviewInput = z.object({
 export const artistRunImport = runInput.extend({
   id, status: z.enum(['active', 'completed', 'needs_review', 'cancelled', 'interrupted']),
   reviews: z.array(reviewInput.extend({ createdAt: z.string().datetime() })).max(4),
-  inspectedRevisionId: id.optional(), batchCount: z.number().int().min(0).max(120),
+  inspectedRevisionId: id.optional(), inspectedFrameIds: z.array(id).max(64).optional(), batchCount: z.number().int().min(0).max(120),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
 }).strict();
 export const importPngInput = z.object({
   projectId: id, name, type: assetType, pngBase64: z.string().min(1),
-}).strict();
+  frameWidth: size.optional(), frameHeight: size.optional(), frameCount: z.number().int().min(1).max(64).optional(), durationMs: durationMs.optional(),
+}).strict().refine(input => (input.frameWidth === undefined) === (input.frameHeight === undefined), { message: 'frameWidth and frameHeight belong together.' });
 export const revisionImport = z.object({
   id, assetId: id, parentId: id.nullable(), document: documentSchema,
   label: z.string().max(300), actor: z.enum(['human', 'agent', 'import']),
@@ -88,7 +116,7 @@ export const revisionImport = z.object({
   validation: z.unknown().optional(), createdAt: z.string().datetime(),
 }).strict();
 export const projectBundle = z.object({
-  kind: z.literal('pixelator-project'), schemaVersion: z.literal(1),
+  kind: z.literal('pixelator-project'), schemaVersion: z.union([z.literal(1), z.literal(2)]),
   project: z.object({ id, name, style: projectStyle, createdAt: z.string().datetime() }).strict(),
   assets: z.array(z.object({
     id, projectId: id, name, type: assetType, tags: z.array(z.string().max(80)).max(30),
