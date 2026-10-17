@@ -4,7 +4,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { AppError, Store } from '../src/store.js';
-import type { ApplyRequest, AssetDetail } from '../src/types.js';
+import type { ApplyRequest, AssetDetail, LegacyPixelDocument, PixelDocument, Revision } from '../src/types.js';
+import { cel } from './helpers.js';
 
 const stores = new Set<Store>();
 const folders: string[] = [];
@@ -92,7 +93,7 @@ describe('transaction boundaries', () => {
 
     store.db.exec('DROP TRIGGER fail_request');
     const result = store.apply(detail.asset.id, edit);
-    expect(result.revision.document.layers[0].pixels[9]).toBe(1);
+    expect(cel(result.revision.document)[9]).toBe(1);
     expect(store.getRun(run.id).batchCount).toBe(1);
     expect(store.getRun(run.id).inspectedRevisionId).toBeUndefined();
     expect(store.listRevisions(detail.asset.id)).toHaveLength(2);
@@ -256,8 +257,8 @@ describe('project portability and revision ownership', () => {
         { op: 'fill', layerId: 'copy', x: 0, y: 0, color: 2, reference: 'composite', contiguous: false },
       ],
     }));
-    expect(result.revision.document.layers[0].pixels.filter(Boolean)).toEqual([1, 1]);
-    expect(result.revision.document.layers[1].pixels.filter(color => color === 2)).toHaveLength(62);
+    expect(cel(result.revision.document, 0).filter(Boolean)).toEqual([1, 1]);
+    expect(cel(result.revision.document, 1).filter(color => color === 2)).toHaveLength(62);
     const imported = store.importProject(store.exportProject(project.id));
     const copy = store.listAssets(imported.id)[0];
     const revision = store.getAsset(copy.id).revision;
@@ -391,5 +392,57 @@ describe('inspection and artist run completion', () => {
     store.recordReview(run.id, { revisionId: detail.revision.id, observations: 'The canvas is transparent.', issues: [] });
     appError(() => store.finishRun(run.id, 'completed'), 'NEEDS_REVIEW');
     expect(store.finishRun(run.id, 'needs_review').status).toBe('needs_review');
+  });
+});
+
+describe('documents stored before animation support', () => {
+  const downgrade = (doc: PixelDocument): LegacyPixelDocument => {
+    const { frames, tags: _tags, layers, ...rest } = doc;
+    return { ...rest, schemaVersion: 1, layers: layers.map(layer => ({ ...layer, pixels: frames[0].cels[layer.id] })) };
+  };
+
+  it('reads legacy revisions and replayed responses as single-frame documents and keeps editing them', () => {
+    const { store, detail } = setup();
+    const painted = store.apply(detail.asset.id, request(detail, 'legacy-paint'));
+    for (const revision of [detail.revision, painted.revision]) {
+      store.db.prepare('UPDATE revisions SET data=? WHERE id=?').run(JSON.stringify({ ...revision, document: downgrade(revision.document) }), revision.id);
+    }
+    const stored = store.db.prepare("SELECT data FROM requests WHERE id LIKE '%:legacy-paint'").get() as { data: string };
+    expect(JSON.parse(stored.data)).toEqual({ revisionId: painted.revision.id, diff: painted.diff });
+    // Requests saved before compact replay records held the whole response, including a version 1 document.
+    const legacyResponse: { asset: unknown; revision: Revision; diff: unknown } = { asset: painted.asset, revision: { ...painted.revision, document: downgrade(painted.revision.document) as unknown as PixelDocument }, diff: painted.diff };
+    store.db.prepare("UPDATE requests SET data=? WHERE id LIKE '%:legacy-paint'").run(JSON.stringify(legacyResponse));
+    expect(JSON.parse((store.db.prepare('SELECT data FROM revisions WHERE id=?').get(painted.revision.id) as { data: string }).data).document.schemaVersion).toBe(1);
+
+    expect(store.getAsset(detail.asset.id).revision).toEqual(painted.revision);
+    expect(store.listRevisions(detail.asset.id)).toEqual([painted.revision, detail.revision]);
+    expect(store.apply(detail.asset.id, request(detail, 'legacy-paint'))).toEqual(painted);
+    const next = store.apply(detail.asset.id, request({ ...painted }, 'after-legacy', { operations: [{ op: 'pixels', layerId: 'body', points: [[3, 3, 2]] }] }));
+    expect(next.revision.document.schemaVersion).toBe(2);
+    expect(cel(next.revision.document)[3 * 8 + 3]).toBe(2);
+    expect(cel(next.revision.document)[9]).toBe(1);
+    const restored = store.restore(detail.asset.id, { revisionId: detail.revision.id, expectedRevision: next.revision.id, requestId: 'restore-legacy' });
+    expect(restored.revision.document).toEqual(detail.revision.document);
+  });
+
+  it('imports version 1 project bundles with legacy documents', () => {
+    const { store, project, detail } = setup();
+    store.apply(detail.asset.id, request(detail, 'bundle-paint'));
+    const bundle = store.exportProject(project.id);
+    const legacy = { ...bundle, schemaVersion: 1, revisions: bundle.revisions.map(revision => ({ ...revision, document: downgrade(revision.document) })) };
+    const imported = store.importProject(legacy);
+    const copy = store.listAssets(imported.id)[0];
+    expect(store.getAsset(copy.id).revision.document).toEqual(store.getAsset(detail.asset.id).revision.document);
+    expect(store.listRevisions(copy.id).map(revision => revision.document.schemaVersion)).toEqual([2, 2]);
+  });
+
+  it('creates animated assets with named frames and tags', () => {
+    const { store, project } = setup();
+    const detail = store.createAsset({ projectId: project.id, name: 'Walker', type: 'character', width: 4, height: 4, frames: [{ id: 'walk_1', durationMs: 120 }, { id: 'walk_2' }], animationTags: [{ name: 'walk', from: 0, to: 1, direction: 'pingpong' }] });
+    expect(detail.revision.document.frames.map(frame => [frame.id, frame.durationMs])).toEqual([['walk_1', 120], ['walk_2', 100]]);
+    expect(detail.revision.document.tags).toEqual([{ name: 'walk', from: 0, to: 1, direction: 'pingpong', loop: true }]);
+    expect(() => store.createAsset({ projectId: project.id, name: 'Bad', type: 'item', frames: [{ id: 'a' }], animationTags: [{ name: 'x', from: 0, to: 4 }] })).toThrow('INVALID_TAGS');
+    const variant = store.createVariant(detail.asset.id, 'Walker copy');
+    expect(variant.revision.document.frames).toEqual(detail.revision.document.frames);
   });
 });

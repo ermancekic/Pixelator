@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { PNG } from 'pngjs';
 import { createApp } from '../src/server.js';
 import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, McpStatus, Project } from '../src/types.js';
+import { cel } from './helpers.js';
 
 const apps = new Set<FastifyInstance>();
 const mcpHeaders = {
@@ -17,6 +18,9 @@ interface ToolResult {
 }
 async function open() {
   const { app } = await createApp({ databasePath: ':memory:', logger: false });
+  // The MCP transport (@hono/node-server) drains a request body Fastify already consumed and, 500 ms later, calls
+  // net.Socket#destroySoon. light-my-request's mock socket lacks it, so long tests crashed; real sockets are unaffected.
+  app.addHook('onRequest', async request => { const socket = request.raw.socket as { destroySoon?: () => void }; socket.destroySoon ??= () => undefined; });
   apps.add(app);
   return app;
 }
@@ -138,8 +142,10 @@ describe('local REST editing', () => {
     const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
     expect(current.revision.document.layers.map(layer => layer.id)).toEqual(['body', 'color-copy', 'sword']);
     expect(current.revision.document.layers[0]).toEqual(detail.revision.document.layers[0]);
+    expect(cel(current.revision.document, 0)).toEqual(cel(detail.revision.document, 0));
     expect(current.revision.document.layers[2]).toEqual(outlined.revision.document.layers[1]);
-    expect(current.revision.document.layers[1].pixels.filter(Boolean)).toEqual([3, 3, 3]);
+    expect(cel(current.revision.document, 2)).toEqual(cel(outlined.revision.document, 1));
+    expect(cel(current.revision.document, 1).filter(Boolean)).toEqual([3, 3, 3]);
     expect(current.revision.operations).toEqual(operations);
     const bundle = (await app.inject(`/api/projects/${project.id}/export`)).json();
     const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
@@ -177,8 +183,8 @@ describe('local REST editing', () => {
     } });
     expect(edited.statusCode, edited.body).toBe(200);
     const painted = edited.json<ApplyResult>().revision.document;
-    expect(painted.layers[0].pixels[20]).toBe(1);
-    expect(painted.layers[0].pixels[80 * 128 + 100]).toBe(0);
+    expect(cel(painted)[20]).toBe(1);
+    expect(cel(painted)[80 * 128 + 100]).toBe(0);
     expect(painted.pivot).toEqual({ x: 127.5, y: 96 });
     const pngResponse = await app.inject(`/api/assets/${detail.asset.id}/export?format=png`);
     expect(pngResponse.statusCode).toBe(200);
@@ -187,7 +193,7 @@ describe('local REST editing', () => {
     expect([...png.data.subarray(20 * 4, 20 * 4 + 4)]).toEqual([15, 56, 15, 255]);
     const pngImport = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Imported large prop', type: 'prop', pngBase64: pngResponse.rawPayload.toString('base64') } });
     expect(pngImport.statusCode, pngImport.body).toBe(200);
-    expect(pngImport.json<AssetDetail>().revision.document.layers[0].pixels).toEqual(painted.layers[0].pixels);
+    expect(cel(pngImport.json<AssetDetail>().revision.document)).toEqual(cel(painted));
     const bundle = (await app.inject(`/api/assets/${detail.asset.id}/export?format=json`)).json();
     const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
     expect(imported.statusCode, imported.body).toBe(200);
@@ -285,6 +291,7 @@ describe('local REST editing', () => {
     expect(painted.revision.id).not.toBe(detail.revision.id);
     expect(painted.diff.changedPixels).toBe(2);
     expect(painted.revision.document.layers[1]).toEqual(detail.revision.document.layers[1]);
+    expect(cel(painted.revision.document, 1)).toEqual(cel(detail.revision.document, 1));
 
     const replay = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload });
     expect(replay.statusCode).toBe(200);
@@ -315,7 +322,7 @@ describe('local REST editing', () => {
     const exported = await app.inject({ method: 'GET', url: `/api/projects/${project.id}/export` });
     expect(exported.statusCode).toBe(200);
     expect(exported.headers['content-disposition']).toContain('attachment;');
-    expect(exported.json()).toMatchObject({ kind: 'pixelator-project', schemaVersion: 1 });
+    expect(exported.json()).toMatchObject({ kind: 'pixelator-project', schemaVersion: 2 });
     const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: exported.json() } });
     expect(imported.statusCode, imported.body).toBe(200);
     const copy = imported.json<Project>();
@@ -559,6 +566,158 @@ describe('MCP transport', () => {
     expect([png.width, png.height]).toEqual([16, 16]);
     expect([...png.data.subarray((2 * 16 + 2) * 4, (2 * 16 + 2) * 4 + 4)]).toEqual([15, 56, 15, 255]);
     expect(png.data[3]).toBe(0);
+  });
+
+  it('reads compact rows that the rows operation reproduces exactly and bounds the region size', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const drawn = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'draw-rows', editScope: { layerIds: ['body', 'sword'] },
+      operations: [{ op: 'rows', layerId: 'body', x: 1, y: 2, rows: ['121', '.3.'] }, { op: 'pixels', layerId: 'sword', points: [[2, 3, 4]] }],
+    } });
+    expect(drawn.isError, JSON.stringify(drawn.content)).not.toBe(true);
+    const composite = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, rect: { x: 0, y: 2, width: 4, height: 2 } } });
+    expect(composite.structuredContent).toMatchObject({ source: 'composite', x: 0, y: 2, width: 4, height: 2, rows: ['.121', '..4.'], legend: { '.': 'transparent', 1: '#0F380F' } });
+    const layer = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, layerId: 'body' } });
+    expect(layer.structuredContent!.rows).toEqual(['........', '........', '.121....', '..3.....', '........', '........', '........', '........']);
+    const copy = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Copy', type: 'item', width: 8, height: 8 } })).structuredContent as unknown as AssetDetail;
+    await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: copy.asset.id, expectedRevision: copy.revision.id, requestId: 'replay-rows', editScope: { layerIds: ['body'] },
+      operations: [{ op: 'rows', layerId: 'body', x: 0, y: 0, rows: layer.structuredContent!.rows }],
+    } });
+    const original = cel((await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>().revision.document);
+    expect(cel((await app.inject(`/api/assets/${copy.asset.id}`)).json<AssetDetail>().revision.document)).toEqual(original);
+    const wide = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Wide', type: 'prop', width: 200, height: 100 } })).structuredContent as unknown as AssetDetail;
+    const tooLarge = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: wide.asset.id } });
+    expect(tooLarge.isError).toBe(true);
+    expect(JSON.parse(tooLarge.content[0].text!)).toMatchObject({ error: { code: 'REGION_TOO_LARGE' } });
+    const outside = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, rect: { x: 7, y: 0, width: 2, height: 1 } } });
+    expect(JSON.parse(outside.content[0].text!)).toMatchObject({ error: { code: 'INVALID_RECT' } });
+    const unknown = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, layerId: 'cape' } });
+    expect(JSON.parse(unknown.content[0].text!)).toMatchObject({ error: { code: 'UNKNOWN_LAYER' } });
+  });
+
+  it('answers apply_operations compactly by default and in full on request', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const compact = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail) } });
+    const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
+    expect(compact.structuredContent).toEqual({
+      assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixel bearbeitet',
+      diff: { changedPixels: 2, changedLayers: ['body'], changedFrames: ['frame-1'], boundingBox: { x: 1, y: 1, width: 2, height: 1 } },
+      validation: { valid: true, colorCount: 2, opaquePixels: 2, boundingBox: { x: 1, y: 1, width: 2, height: 1 }, isolatedPixels: 0, issues: [] },
+      layers: [{ id: 'body', visible: true, locked: false }, { id: 'sword', visible: true, locked: false }],
+      frames: [{ id: 'frame-1', durationMs: 100 }], tags: [],
+    });
+    expect(JSON.stringify(compact.structuredContent)).not.toContain('palette');
+    const full = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: detail.asset.id, ...paint(current, 'full'), response: 'full',
+      operations: [{ op: 'pixels', layerId: 'body', points: [[1, 1, 3]] }],
+    } });
+    expect(full.structuredContent).toMatchObject({ asset: { id: detail.asset.id }, revision: { parentId: current.revision.id, document: { palette: current.revision.document.palette } }, diff: { changedPixels: 1 } });
+  });
+
+  it('returns native and enlarged inspection images in one call and rejects oversized renders', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const inspected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: detail.asset.id, scales: [1, 8] } });
+    expect(inspected.isError).not.toBe(true);
+    const images = inspected.content.filter(content => content.type === 'image').map(image => PNG.sync.read(Buffer.from(image.data!, 'base64')));
+    expect(images.map(png => [png.width, png.height])).toEqual([[8, 8], [64, 64]]);
+    expect(inspected.structuredContent).toMatchObject({ scale: 1, imageWidth: 8, images: [{ scale: 1, width: 8, height: 8 }, { scale: 8, width: 64, height: 64 }] });
+    const huge = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: detail.asset.projectId, name: 'Huge', type: 'prop', width: 130, height: 130 } })).json<AssetDetail>();
+    const rejected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: huge.asset.id, scales: [1, 32] } });
+    expect(JSON.parse(rejected.content[0].text!)).toMatchObject({ error: { code: 'RENDER_SIZE' } });
+  });
+
+  it('creates, inspects as one sheet, reviews, finishes and exports an animation through MCP', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      return result;
+    };
+    const run = (await call('start_run', { projectId: project.id, prompt: 'Two-frame bounce' })).structuredContent as unknown as ArtistRun;
+    const created = (await call('create_asset', { projectId: project.id, runId: run.id, name: 'Slime', type: 'character', width: 4, height: 3, frames: [{ id: 'up', durationMs: 150 }, { id: 'down' }], animationTags: [{ name: 'bounce', from: 0, to: 1, direction: 'pingpong' }] })).structuredContent as unknown as AssetDetail;
+    expect(created.revision.document).toMatchObject({ frames: [{ id: 'up', durationMs: 150 }, { id: 'down', durationMs: 100 }], tags: [{ name: 'bounce', from: 0, to: 1, direction: 'pingpong', loop: true }] });
+    expect(JSON.stringify(created.revision.document)).not.toContain('cels');
+    const drawn = (await call('apply_operations', { assetId: created.asset.id, expectedRevision: created.revision.id, requestId: 'slime-up', runId: run.id, editScope: { layerIds: ['body'], frameIds: ['up'] }, operations: [{ op: 'rows', layerId: 'body', x: 0, y: 0, rows: ['.11.', '1221', '1111'] }] })).structuredContent!;
+    expect(drawn).toMatchObject({ diff: { changedFrames: ['up'] }, validation: { issues: [{ code: 'EMPTY_FRAME' }] }, frames: [{ id: 'up' }, { id: 'down' }] });
+    const squashed = (await call('apply_operations', { assetId: created.asset.id, expectedRevision: drawn.revisionId, requestId: 'slime-down', runId: run.id, editScope: { layerIds: ['body'], frameIds: ['down'] }, operations: [
+      { op: 'stamp', layerId: 'body', sourceFrameId: 'up', rect: { x: 0, y: 1, width: 4, height: 2 } },
+      { op: 'rows', layerId: 'body', x: 0, y: 0, rows: ['....'] },
+    ] })).structuredContent!;
+    const frameRead = (await call('read_pixels', { assetId: created.asset.id, frameId: 'down' })).structuredContent!;
+    expect(frameRead).toMatchObject({ frameId: 'down', rows: ['....', '1221', '1111'] });
+
+    const partial = await call('inspect_asset', { assetId: created.asset.id, runId: run.id, frameId: 'down', scales: [1] });
+    expect(partial.structuredContent).toMatchObject({ imageWidth: 4, imageHeight: 3, view: { layout: 'frame', frameIds: ['down'] } });
+    await call('record_review', { runId: run.id, revisionId: squashed.revisionId, observations: 'Only the squashed frame was checked.', issues: [] });
+    const blocked = await rpc<ToolResult>(app, 'tools/call', { name: 'finish_run', arguments: { runId: run.id, status: 'completed' } });
+    expect(JSON.parse(blocked.content[0].text!)).toMatchObject({ error: { code: 'REVIEW_REQUIRED' } });
+
+    const sheet = await call('inspect_asset', { assetId: created.asset.id, runId: run.id, scales: [1, 4], onion: { before: 1 } });
+    const images = sheet.content.filter(content => content.type === 'image').map(image => PNG.sync.read(Buffer.from(image.data!, 'base64')));
+    expect(images.map(png => [png.width, png.height])).toEqual([[9, 3], [36, 12]]);
+    expect(sheet.structuredContent).toMatchObject({ view: { layout: 'sheet', frameIds: ['up', 'down'], columns: 2, rows: 1, gutter: 1, gutterColor: '#FF00FF', cells: [{ frameId: 'up', x: 0, durationMs: 150 }, { frameId: 'down', x: 5, durationMs: 100 }], onion: { before: 1, after: 0 } } });
+    expect([...images[0].data.subarray(4 * 4, 4 * 4 + 4)]).toEqual([255, 0, 255, 255]);
+    expect([...images[0].data.subarray(6 * 4, 6 * 4 + 4)]).toEqual([48, 96, 255, 255]);
+    await call('record_review', { runId: run.id, revisionId: squashed.revisionId, observations: 'Both frames read as the same slime; the squash keeps the base on the pivot line.', issues: [] });
+    expect((await call('finish_run', { runId: run.id, status: 'completed' })).structuredContent).toMatchObject({ status: 'completed', inspectedFrameIds: ['up', 'down'] });
+
+    const filtered = (await call('get_asset', { assetId: created.asset.id, includePixels: true, frameIds: ['down'] })).structuredContent as unknown as AssetDetail;
+    expect(filtered.revision.document.frames.map(frame => frame.id)).toEqual(['down']);
+    expect(filtered.revision.document.frames[0].cels.body).toEqual([0, 0, 0, 0, 1, 2, 2, 1, 1, 1, 1, 1]);
+    const unknown = await rpc<ToolResult>(app, 'tools/call', { name: 'get_asset', arguments: { assetId: created.asset.id, frameIds: ['side'] } });
+    expect(JSON.parse(unknown.content[0].text!)).toMatchObject({ error: { code: 'UNKNOWN_FRAME' } });
+
+    const exported = (await call('export_asset', { assetId: created.asset.id, format: 'sheet' })).structuredContent as { files: { path: string; downloadUrl: string }[] };
+    expect(exported.files.map(file => file.path.split(/[\\/]/).at(-1))).toEqual([expect.stringMatching(/^Slime-.*\.sheet\.png$/), expect.stringMatching(/^Slime-.*\.sheet\.json$/)]);
+    expect(exported.files[1].downloadUrl).toContain('format=sheet-json');
+    const png = PNG.sync.read((await app.inject(`/api/assets/${created.asset.id}/export?format=sheet`)).rawPayload);
+    expect([png.width, png.height]).toEqual([8, 3]);
+    const aseprite = (await app.inject(`/api/assets/${created.asset.id}/export?format=sheet-json&tag=bounce`)).json();
+    expect(aseprite).toMatchObject({ frames: [{ frame: { x: 0, y: 0, w: 4, h: 3 }, duration: 150 }, { frame: { x: 4, y: 0, w: 4, h: 3 }, duration: 100 }], meta: { frameTags: [{ name: 'bounce', from: 0, to: 1, direction: 'pingpong' }] } });
+    const unity = (await app.inject(`/api/assets/${created.asset.id}/export?format=unity`)).json();
+    expect(unity).toMatchObject({ textureImporter: { spriteMode: 'Multiple' }, sprites: [{ name: 'Slime_up' }, { name: 'Slime_down' }], clips: [{ name: 'bounce', direction: 'pingpong' }] });
+    const single = PNG.sync.read((await app.inject(`/api/assets/${created.asset.id}/export?format=png&frameId=down`)).rawPayload);
+    expect([...single.data.subarray(0, 4)]).toEqual([0, 0, 0, 0]);
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=gifv`)).statusCode).toBe(400);
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=sheet&tag=missing`)).json()).toMatchObject({ error: { code: 'UNKNOWN_TAG' } });
+  });
+
+  it('exports GIFs and re-imports an exported sprite sheet as frames', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 2, frames: [{ id: 'a', durationMs: 90 }, { id: 'b' }], animationTags: [{ name: 'spin', from: 0, to: 1, loop: false }] } })).json<AssetDetail>();
+    const drawn = (await app.inject({ method: 'POST', url: `/api/assets/${created.asset.id}/operations`, payload: { expectedRevision: created.revision.id, requestId: 'coin', editScope: { layerIds: ['body'] }, operations: [
+      { op: 'rows', layerId: 'body', frameId: 'a', x: 0, y: 0, rows: ['11', '.1'] }, { op: 'rows', layerId: 'body', frameId: 'b', x: 0, y: 0, rows: ['2.', '22'] },
+    ] } })).json<ApplyResult>();
+    const gif = await app.inject(`/api/assets/${created.asset.id}/export?format=gif&tag=spin&scale=3`);
+    expect(gif.statusCode).toBe(200);
+    expect(gif.headers['content-type']).toBe('image/gif');
+    expect(gif.rawPayload.subarray(0, 6).toString()).toBe('GIF89a');
+    expect([gif.rawPayload.readUInt16LE(6), gif.rawPayload.readUInt16LE(8)]).toEqual([6, 6]);
+    expect(gif.rawPayload.includes(Buffer.from('NETSCAPE2.0'))).toBe(false);
+    const mcpGif = await rpc<ToolResult>(app, 'tools/call', { name: 'export_asset', arguments: { assetId: created.asset.id, format: 'gif' } });
+    expect((mcpGif.structuredContent as { path: string }).path).toMatch(/\.gif$/);
+    const sheet = (await app.inject(`/api/assets/${created.asset.id}/export?format=sheet`)).rawPayload.toString('base64');
+    const imported = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Coin again', type: 'character', pngBase64: sheet, frameWidth: 2, frameHeight: 2, durationMs: 120 } });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const copy = imported.json<AssetDetail>().revision.document;
+    expect(copy).toMatchObject({ width: 2, height: 2, pivot: { x: 1, y: 2 } });
+    expect(copy.frames.map(frame => [frame.id, frame.durationMs])).toEqual([['frame-1', 120], ['frame-2', 120]]);
+    const colors = (doc: typeof copy) => doc.frames.map(frame => frame.cels[doc.layers[0].id].map(index => doc.palette[index]));
+    expect(colors(copy)).toEqual(colors(drawn.revision.document));
+    const half = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Bad', type: 'item', pngBase64: sheet, frameWidth: 2 } });
+    expect(half.statusCode).toBe(400);
+    const uneven = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Bad', type: 'item', pngBase64: sheet, frameWidth: 3, frameHeight: 2 } });
+    expect(uneven.json()).toMatchObject({ error: { code: 'SHEET_SIZE' } });
+  });
+
+  it('requires a frame for drawing in animations and rejects a frame layout for several frames', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 2, frames: [{ id: 'a' }, { id: 'b' }] } })).structuredContent as unknown as AssetDetail;
+    const missing = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: created.asset.id, expectedRevision: created.revision.id, requestId: 'no-frame', editScope: { layerIds: ['body'] }, operations: [{ op: 'pixels', layerId: 'body', points: [[0, 0, 1]] }] } });
+    expect(JSON.parse(missing.content[0].text!)).toMatchObject({ error: { code: 'FRAME_REQUIRED' } });
+    const layout = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: created.asset.id, layout: 'frame' } });
+    expect(JSON.parse(layout.content[0].text!)).toMatchObject({ error: { code: 'INVALID_LAYOUT' } });
   });
 
   it('returns safe tool errors for malformed input and engine rejection without adding a revision', async () => {
