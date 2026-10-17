@@ -1,4 +1,5 @@
 import { nearestColor } from '../src/engine';
+import { t } from './i18n';
 import { ROW_ALPHABET } from '../src/raster-text';
 import type { Operation, Rect } from '../src/types';
 import { fromCanvasMask, selectionContains } from './selection-helpers';
@@ -65,7 +66,7 @@ export function clipRgba(clip: ClipImage): Uint8ClampedArray {
 
 /** Reads RGBA pixels; alpha below 128 counts as transparent because indexed pixels are either opaque or empty. */
 export function rgbaClip(data: ArrayLike<number>, width: number, height: number): ClipImage {
-  if (width * height > MAX_CLIP_PIXELS) throw new Error('Das Bild in der Zwischenablage ist zu groß zum Einfügen.');
+  if (width * height > MAX_CLIP_PIXELS) throw new Error(t('Das Bild in der Zwischenablage ist zu groß zum Einfügen.'));
   const colors: (string | null)[] = [];
   for (let i = 0; i < width * height; i++) colors.push(data[i * 4 + 3] < 128 ? null : `#${[0, 1, 2].map(c => data[i * 4 + c].toString(16).padStart(2, '0')).join('')}`.toUpperCase());
   return { width, height, colors };
@@ -74,13 +75,13 @@ export function rgbaClip(data: ArrayLike<number>, width: number, height: number)
 export async function clipPng(clip: ClipImage): Promise<Blob> {
   const canvas = document.createElement('canvas'); canvas.width = clip.width; canvas.height = clip.height;
   canvas.getContext('2d')!.putImageData(new ImageData(clipRgba(clip) as Uint8ClampedArray<ArrayBuffer>, clip.width, clip.height), 0, 0);
-  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PNG konnte nicht erzeugt werden.')), 'image/png'));
+  return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error(t('PNG konnte nicht erzeugt werden.'))), 'image/png'));
 }
 
 export async function imageClip(blob: Blob): Promise<ClipImage> {
   const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
   try {
-    if (bitmap.width * bitmap.height > MAX_CLIP_PIXELS) throw new Error('Das Bild in der Zwischenablage ist zu groß zum Einfügen.');
+    if (bitmap.width * bitmap.height > MAX_CLIP_PIXELS) throw new Error(t('Das Bild in der Zwischenablage ist zu groß zum Einfügen.'));
     const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
     const context = canvas.getContext('2d', { willReadFrequently: true })!; context.drawImage(bitmap, 0, 0);
     return rgbaClip(context.getImageData(0, 0, bitmap.width, bitmap.height).data, bitmap.width, bitmap.height);

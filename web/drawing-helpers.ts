@@ -1,3 +1,4 @@
+import { msg } from './i18n';
 import { createDocument, getFrame, previewOperations } from '../src/engine';
 import type { Operation, PixelDocument, Rect } from '../src/types';
 import type { Point } from './view-helpers';
@@ -61,9 +62,9 @@ export function strokePixels(points: Point[], width: number, height: number, col
 
 export type Pattern = 'solid' | 'checker' | 'bayer-12' | 'bayer-25' | 'bayer-75' | 'lines-h' | 'lines-v' | 'diagonal';
 export const PATTERNS: { id: Pattern; label: string }[] = [
-  { id: 'solid', label: 'Voll' }, { id: 'checker', label: 'Schachbrett 50 %' }, { id: 'bayer-25', label: 'Raster 25 %' },
-  { id: 'bayer-12', label: 'Raster 12,5 %' }, { id: 'bayer-75', label: 'Raster 75 %' }, { id: 'lines-h', label: 'Linien waagerecht' },
-  { id: 'lines-v', label: 'Linien senkrecht' }, { id: 'diagonal', label: 'Diagonal' },
+  { id: 'solid', label: msg('Voll') }, { id: 'checker', label: msg('Schachbrett 50 %') }, { id: 'bayer-25', label: msg('Raster 25 %') },
+  { id: 'bayer-12', label: msg('Raster 12,5 %') }, { id: 'bayer-75', label: msg('Raster 75 %') }, { id: 'lines-h', label: msg('Linien waagerecht') },
+  { id: 'lines-v', label: msg('Linien senkrecht') }, { id: 'diagonal', label: 'Diagonal' },
 ];
 const BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 /** Whether a dither pattern paints the primary color at a canvas position; patterns stay aligned to the canvas between strokes. */

@@ -53,7 +53,7 @@ describe('transforming shaped selections', () => {
     expect(moved.selection).toEqual({ rect: { x: 1, y: 1, width: 2, height: 2 }, mask: Uint8Array.from([1, 0, 0, 1]) });
     expect(moved.points).toEqual([[0, 0, 0], [1, 1, 1], [2, 2, 4]]);
     expect(transformSelection(raster, 3, 3, diagonal, { dx: 1, dy: 0 }, true).points).toEqual([[1, 0, 1], [2, 1, 4]]);
-    expect(() => transformSelection(raster, 3, 3, diagonal, { dx: 2, dy: 0 })).toThrow('Leinwand');
+    expect(() => transformSelection(raster, 3, 3, diagonal, { dx: 2, dy: 0 })).toThrow('canvas');
   });
 
   it('flips and rotates the selected pixels with their mask', () => {

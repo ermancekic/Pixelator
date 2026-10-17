@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline';
 
 const url = process.env.PIXELATOR_URL ?? 'http://127.0.0.1:4317/mcp';
-if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname)) throw new Error('PIXELATOR_URL muss lokal sein.');
+if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname)) throw new Error('PIXELATOR_URL must be local.');
 const input = createInterface({ input: process.stdin });
 let protocolVersion = '2025-11-25';
 let sessionId: string | null = null;
@@ -26,7 +26,7 @@ for await (const line of input) {
       const reconnected = await send(initialization);
       if (!reconnected.ok) throw new Error(`HTTP ${reconnected.status}`);
       const initialized = await reconnected.json() as { result?: { protocolVersion?: string } };
-      if (!initialized.result?.protocolVersion) throw new Error('MCP-Neuverbindung fehlgeschlagen.');
+      if (!initialized.result?.protocolVersion) throw new Error('MCP reconnect failed.');
       protocolVersion = initialized.result.protocolVersion;
       sessionId = reconnected.headers.get('mcp-session-id');
       await (await send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }))).body?.cancel();
@@ -39,7 +39,7 @@ for await (const line of input) {
     if (request.method === 'initialize' && result.result?.protocolVersion) { protocolVersion = result.result.protocolVersion; sessionId = response.headers.get('mcp-session-id'); initialization = line; }
     if (request.id !== undefined) process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
-    if (request.id !== undefined) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: `Pixelator-Service nicht erreichbar. npm start ausführen. ${error instanceof Error ? error.message : ''}` } })}\n`);
+    if (request.id !== undefined) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: `Pixelator service unreachable. Run npm start. ${error instanceof Error ? error.message : ''}` } })}\n`);
   }
 }
 if (sessionId) {
