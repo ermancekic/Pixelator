@@ -19,6 +19,16 @@ Before every artist task, call `get_workflow` and apply its current `artistGuide
 6. Fix specific observed issues, inspect the new image and record another review. Allow at most three correction rounds after the first complete drawing. Respect the run's server limits and aim for ordinary tasks to finish within ten minutes. Stop sooner when improvements stall; retain the best valid result and name unresolved issues.
 7. Call `validate_asset` and ensure the current final revision has been inspected and reviewed. Reuse its existing final review when no further edit occurred; do not spend another review merely to finish. Call `finish_run`: use `completed` when the requested work is done and technical checks pass; otherwise use `needs_review`. Return asset/revision IDs, a brief account of changes and any remaining limitation. Export with `export_asset` when requested.
 
+## Animate
+
+Animations are frames of one asset that share its semantic layers, palette and pivot. Create them with `create_asset` and `frames` (for example `[{ "id": "walk_1", "durationMs": 120 }, ...]`) and optional `animationTags`, or add frames to an existing asset with frame operations.
+
+1. Draw the first key pose completely and inspect it.
+2. Build further frames from it instead of redrawing: `duplicate_frame` (copy directly after the source), then change only what moves with `stamp` (copy a region from any frame/layer with `dx`/`dy`; `mode: "over"` keeps pixels under transparent source pixels), `move` and `rows`. Every drawing operation targets one frame: set `frameId` or a single `editScope.frameIds` entry; `editScope.frameIds` protects all other frames.
+3. Frame structure and timing (`add_frame`, `duplicate_frame`, `remove_frame`, `reorder_frames`, `frame_duration`, `set_tags`) needs every layer in `editScope.layerIds`, no `rect` and `allowFrameChanges: true`. Tags are zero-based and inclusive and follow inserted or removed frames.
+4. Inspect the whole animation as one sprite sheet: `inspect_asset` with `runId` shows all frames in timeline order (or `tag`/`frameIds`), separated by a gutter color outside the palette; add `onion: { "before": 1 }` to see the previous frame tinted blue behind each frame. Review the Artist Guide's Motion point. Finishing as `completed` requires an inspection that showed every frame.
+5. Export with `export_asset` `format: "sheet"` (PNG plus Aseprite-compatible JSON with durations and tags) or `format: "unity"` (one sprite per frame and one clip per tag).
+
 ## Precise editing
 
 - Read the current document and revision before changing an existing asset. Identify the target layer and source/destination bounds; do not redraw the entire character for a local request. Use `read_pixels` with a `rect` (and `layerId` when needed) to get the exact indices of the region in the same row encoding, edit those rows and write them back with `rows`; reserve `get_asset` `includePixels` for whole-document needs.
@@ -27,6 +37,6 @@ Before every artist task, call `get_workflow` and apply its current `artistGuide
 - Preserve locked layers and everything outside the permitted scope. Inspect the result and its diff, then verify that the requested pixel-distance or color change actually happened. If the canvas prevents the edit, explain the constraint rather than silently resizing or clipping.
 - Reuse stored revisions for comparison or recovery. `restore_revision` creates a new current revision; inspect that new revision before finalizing it.
 
-Technical validity is measurable; silhouette readability, style, lighting and identity require visual judgment. Reviews and scores are observations, not proof of art quality. Animation, tilesets and asset-pack orchestration are later extensions; do not claim those exports exist without matching tools.
+Technical validity is measurable; silhouette readability, style, lighting and identity require visual judgment. Reviews and scores are observations, not proof of art quality. Tilesets and asset-pack orchestration are later extensions; do not claim those exports exist without matching tools.
 
 Judge small assets at their native size as well as enlarged. Reserve contrasting pixels for the features that explain the object: a character's face and equipment, or a bottle's neck and stopper. A correct outline and palette do not make a featureless shape game-readable.

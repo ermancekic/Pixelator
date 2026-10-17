@@ -247,7 +247,7 @@ export class Store extends EventEmitter {
       };
       this.appendRevision(asset, revision);
       const response: ApplyResult = { asset, revision, diff: applied.diff };
-      if (run) this.putRun({ ...run, assetId, batchCount: run.batchCount + 1, inspectedRevisionId: undefined, updatedAt: revision.createdAt });
+      if (run) this.putRun({ ...run, assetId, batchCount: run.batchCount + 1, inspectedRevisionId: undefined, inspectedFrameIds: undefined, updatedAt: revision.createdAt });
       this.saveRequest(assetId, request.requestId, { method: 'apply', ...request }, response);
       return response;
     });
@@ -293,17 +293,18 @@ export class Store extends EventEmitter {
     return this.transaction(() => {
       const run = this.getRun(id);
       if (run.status !== 'interrupted') throw new AppError('RUN_STATUS', 'Nur unterbrochene Aufträge können fortgesetzt werden.');
-      const resumed = { ...run, status: 'active' as const, inspectedRevisionId: undefined, updatedAt: now() };
+      const resumed = { ...run, status: 'active' as const, inspectedRevisionId: undefined, inspectedFrameIds: undefined, updatedAt: now() };
       this.putRun(resumed);
       return resumed;
     });
   }
-  inspected(runId: string, assetId: string, revisionId: string) {
+  inspected(runId: string, assetId: string, revisionId: string, frameIds?: string[]) {
     this.transaction(() => {
       const run = this.requireActiveRun(runId);
       if (run.assetId !== assetId) throw new AppError('RUN_ASSET', 'Das Bild gehört nicht zu diesem Auftrag.');
-      if (this.getAsset(assetId).revision.id !== revisionId) throw new AppError('REVISION_CONFLICT', 'Nur die aktuelle Revision kann für den Abschluss inspiziert werden.', 409);
-      this.putRun({ ...run, inspectedRevisionId: revisionId, updatedAt: now() });
+      const { revision } = this.getAsset(assetId);
+      if (revision.id !== revisionId) throw new AppError('REVISION_CONFLICT', 'Nur die aktuelle Revision kann für den Abschluss inspiziert werden.', 409);
+      this.putRun({ ...run, inspectedRevisionId: revisionId, inspectedFrameIds: frameIds ?? revision.document.frames.map(frame => frame.id), updatedAt: now() });
     });
   }
   recordReview(runId: string, input: unknown): ArtistRun {
@@ -327,6 +328,9 @@ export class Store extends EventEmitter {
         const revision = this.getAsset(run.assetId).revision;
         const review = run.reviews.at(-1);
         if (run.inspectedRevisionId !== revision.id || review?.revisionId !== revision.id) throw new AppError('REVIEW_REQUIRED', 'Die Endrevision muss angesehen und bewertet werden.');
+        // Older runs recorded no frame coverage; they predate animation and inspected their only frame.
+        const shown = new Set(run.inspectedFrameIds ?? [revision.document.frames[0].id]);
+        if (revision.document.frames.some(frame => !shown.has(frame.id))) throw new AppError('REVIEW_REQUIRED', 'Bei Animationen muss die letzte Inspektion alle Frames zeigen, zum Beispiel als Sprite-Sheet.');
         if (!revision.validation.valid || revision.validation.opaquePixels === 0 || review.issues.length) throw new AppError('NEEDS_REVIEW', 'Offene Probleme oder ein leeres Asset erlauben nur needs_review.');
       }
       const updated = { ...run, status, updatedAt: now() };

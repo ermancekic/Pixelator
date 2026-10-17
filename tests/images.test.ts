@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PNG } from 'pngjs';
-import { composite, createDocument } from '../src/engine.js';
-import { importPng, renderPng, renderThumbnail, unityManifest } from '../src/images.js';
+import { applyOperations, composite, createDocument } from '../src/engine.js';
+import { framesFor, importPng, ONION_COLORS, renderPng, renderSheet, renderThumbnail, sheetLayout, sheetManifest, unityManifest, unitySheetManifest } from '../src/images.js';
 import { Store } from '../src/store.js';
 import { cel, setCel } from './helpers.js';
 
@@ -145,5 +145,79 @@ describe('rendering and Unity coordinates', () => {
       textureImporter: { filterMode: 'Point', textureCompression: 'Uncompressed', mipmapEnabled: false, alphaIsTransparency: true },
     });
     expect(doc.pivot).toEqual(pivot);
+  });
+});
+
+describe('animation sheets and engine metadata', () => {
+  const walk = () => {
+    const doc = createDocument({
+      width: 2, height: 1, palette, layers: [{ id: 'body', name: 'Body' }], pivot: { x: 1, y: 1 },
+      frames: [{ id: 'idle', durationMs: 300 }, { id: 'walk_1' }, { id: 'walk_2', durationMs: 120 }],
+      tags: [{ name: 'idle', from: 0, to: 0 }, { name: 'walk', from: 1, to: 2, direction: 'pingpong' }],
+    });
+    return applyOperations(doc, [
+      { op: 'rows', layerId: 'body', frameId: 'idle', x: 0, y: 0, rows: ['1.'] },
+      { op: 'rows', layerId: 'body', frameId: 'walk_1', x: 0, y: 0, rows: ['.2'] },
+      { op: 'rows', layerId: 'body', frameId: 'walk_2', x: 0, y: 0, rows: ['33'] },
+    ], { layerIds: ['body'] }).document;
+  };
+  const pixel = (png: PNG, x: number, y: number) => [...png.data.subarray((y * png.width + x) * 4, (y * png.width + x) * 4 + 4)];
+
+  it('lays frames out in rows with a gutter color outside the palette and keeps transparency inside cells', () => {
+    const doc = walk();
+    const { png, layout } = renderSheet(doc, { columns: 2, gutter: 1 });
+    expect(layout).toMatchObject({ columns: 2, rows: 2, gutter: 1, gutterColor: '#FF00FF', width: 5, height: 3 });
+    expect(layout.cells.map(({ frameId, x, y, durationMs }) => [frameId, x, y, durationMs])).toEqual([['idle', 0, 0, 300], ['walk_1', 3, 0, 100], ['walk_2', 0, 2, 120]]);
+    const image = PNG.sync.read(png);
+    expect([image.width, image.height]).toEqual([5, 3]);
+    expect(pixel(image, 0, 0)).toEqual([255, 0, 0, 255]);
+    expect(pixel(image, 1, 0)).toEqual([0, 0, 0, 0]);
+    expect(pixel(image, 2, 0)).toEqual([255, 0, 255, 255]);
+    expect(pixel(image, 4, 0)).toEqual([0, 0, 255, 255]);
+    expect(pixel(image, 1, 2)).toEqual([255, 255, 255, 255]);
+    expect(pixel(image, 4, 2)).toEqual([255, 0, 255, 255]);
+    const magenta = createDocument({ width: 1, height: 1, palette: ['#00000000', '#FF00FF'], frames: [{ id: 'a' }, { id: 'b' }] });
+    expect(sheetLayout(magenta, { gutter: 1 }).gutterColor).toBe('#00FFFF');
+    const scaled = PNG.sync.read(renderSheet(doc, { frameIds: ['walk_2', 'idle'], scale: 3 }).png);
+    expect([scaled.width, scaled.height]).toEqual([12, 3]);
+    expect(pixel(scaled, 5, 2)).toEqual([255, 255, 255, 255]);
+    expect(pixel(scaled, 6, 0)).toEqual([255, 0, 0, 255]);
+    expect(() => sheetLayout(doc, { frameIds: ['missing'] })).toThrow(expect.objectContaining({ code: 'UNKNOWN_FRAME' }));
+    expect(framesFor(doc, 'walk')).toEqual(['walk_1', 'walk_2']);
+    expect(() => framesFor(doc, 'run')).toThrow(expect.objectContaining({ code: 'UNKNOWN_TAG' }));
+  });
+
+  it('tints neighboring frames only where the inspected frame is transparent', () => {
+    const doc = walk();
+    const image = PNG.sync.read(renderSheet(doc, { frameIds: ['walk_1'], onion: { before: 1, after: 1 } }).png);
+    const blue = [parseInt(ONION_COLORS.before[0].slice(1, 3), 16), parseInt(ONION_COLORS.before[0].slice(3, 5), 16), parseInt(ONION_COLORS.before[0].slice(5, 7), 16), 255];
+    expect(pixel(image, 0, 0)).toEqual(blue);
+    expect(pixel(image, 1, 0)).toEqual([0, 0, 255, 255]);
+    const last = PNG.sync.read(renderSheet(doc, { frameIds: ['walk_2'], onion: { after: 2 } }).png);
+    expect(pixel(last, 0, 0)).toEqual([255, 255, 255, 255]);
+  });
+
+  it('describes sheets in Aseprite array format and as Unity sprites with clips per tag', () => {
+    const doc = walk();
+    const layout = sheetLayout(doc);
+    const manifest = sheetManifest('Hero', 'hero.sheet.png', doc, layout);
+    expect(manifest.frames.map(frame => [frame.filename, frame.frame, frame.duration])).toEqual([
+      ['Hero idle', { x: 0, y: 0, w: 2, h: 1 }, 300], ['Hero walk_1', { x: 2, y: 0, w: 2, h: 1 }, 100], ['Hero walk_2', { x: 4, y: 0, w: 2, h: 1 }, 120],
+    ]);
+    expect(manifest.meta).toMatchObject({ image: 'hero.sheet.png', size: { w: 6, h: 1 }, frameTags: [{ name: 'idle', from: 0, to: 0, direction: 'forward' }, { name: 'walk', from: 1, to: 2, direction: 'pingpong' }], pivot: { x: 1, y: 1 } });
+    const tagged = sheetManifest('Hero', 'walk.png', doc, sheetLayout(doc, { frameIds: framesFor(doc, 'walk') }));
+    expect(tagged.meta.frameTags).toEqual([{ name: 'walk', from: 0, to: 1, direction: 'pingpong' }]);
+    const tall = sheetLayout(doc, { columns: 1 });
+    const unity = unitySheetManifest('asset_1', 'rev_1', 'Hero', doc, { image: 'hero.sheet.png', layout: tall });
+    expect(unity).toMatchObject({ texture: 'hero.sheet.png', textureWidth: 2, textureHeight: 3, textureImporter: { spriteMode: 'Multiple', filterMode: 'Point' }, pivot: { x: 0.5, y: 0 } });
+    expect(unity.sprites.map(sprite => [sprite.name, sprite.rect])).toEqual([
+      ['Hero_idle', { x: 0, y: 2, width: 2, height: 1 }], ['Hero_walk_1', { x: 0, y: 1, width: 2, height: 1 }], ['Hero_walk_2', { x: 0, y: 0, width: 2, height: 1 }],
+    ]);
+    expect(unity.clips).toEqual([
+      { name: 'idle', loop: true, direction: 'forward', frames: [{ sprite: 'Hero_idle', durationMs: 300 }] },
+      { name: 'walk', loop: true, direction: 'pingpong', frames: [{ sprite: 'Hero_walk_1', durationMs: 100 }, { sprite: 'Hero_walk_2', durationMs: 120 }] },
+    ]);
+    const untagged = { ...doc, tags: [] };
+    expect(unitySheetManifest('a', 'r', 'Hero', untagged, { image: 'x.png', layout }).clips).toEqual([{ name: 'Hero', loop: true, direction: 'forward', frames: layout.cells.map(cell => ({ sprite: `Hero_${cell.frameId}`, durationMs: cell.durationMs })) }]);
   });
 });

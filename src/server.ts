@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { Store, AppError } from './store.js';
 import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
-import { renderPng, renderThumbnail, importPng, unityManifest } from './images.js';
+import { framesFor, renderPng, renderSheet, renderThumbnail, importPng, sheetManifest, unityManifest, unitySheetManifest } from './images.js';
 import * as schema from './contracts.js';
 import type { McpAgent, McpStatus } from './types.js';
 
@@ -107,12 +107,18 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     const revision = store.getRevision(request.params.id, revisionId);
     return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderThumbnail(revision.document));
   });
-  app.get<{ Params: { id: string }; Querystring: { format?: string } }>('/api/assets/:id/export', (request, reply) => {
-    const format = z.enum(['png', 'json', 'unity']).parse(request.query.format ?? 'png');
-    const { asset, revision } = store.getAsset(request.params.id);
+  app.get<{ Params: { id: string } }>('/api/assets/:id/export', (request, reply) => {
+    const query = z.object({ format: z.enum(['png', 'json', 'unity', 'sheet', 'sheet-json']).default('png'), frameId: z.string().min(1).max(100).optional(), tag: z.string().min(1).max(160).optional(), columns: z.coerce.number().int().min(1).max(64).optional() }).strict().parse(request.query);
+    const { asset, revision } = store.getAsset(request.params.id); const { document } = revision;
     const name = asset.name.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 80) || 'asset';
-    reply.header('Content-Disposition', `attachment; filename="${name}.${format === 'png' ? 'png' : format === 'unity' ? 'unity.json' : 'pixelator.json'}"`);
-    return format === 'png' ? reply.type('image/png').send(renderPng(revision.document)) : reply.type('application/json').send(format === 'unity' ? unityManifest(asset.id, revision.id, asset.name, revision.document) : store.exportAsset(asset.id));
+    const sheet = () => renderSheet(document, { frameIds: framesFor(document, query.tag), columns: query.columns });
+    const extension = { png: 'png', json: 'pixelator.json', unity: 'unity.json', sheet: 'sheet.png', 'sheet-json': 'sheet.json' }[query.format];
+    reply.header('Content-Disposition', `attachment; filename="${name}.${extension}"`);
+    if (query.format === 'png') return reply.type('image/png').send(renderPng(document, 1, query.frameId));
+    if (query.format === 'sheet') return reply.type('image/png').send(sheet().png);
+    if (query.format === 'sheet-json') return reply.type('application/json').send(sheetManifest(asset.name, `${name}.sheet.png`, document, sheet().layout));
+    if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheet().layout }) : unityManifest(asset.id, revision.id, asset.name, document));
+    return reply.type('application/json').send(store.exportAsset(asset.id));
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/export', (request, reply) => reply.type('application/json').header('Content-Disposition', 'attachment; filename="project.pixelator.json"').send(store.exportProject(request.params.id)));
   // shortcut: project imports are capped at 128 MiB; use a streaming container for larger histories.

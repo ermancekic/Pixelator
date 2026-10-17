@@ -18,6 +18,9 @@ interface ToolResult {
 }
 async function open() {
   const { app } = await createApp({ databasePath: ':memory:', logger: false });
+  // The MCP transport (@hono/node-server) drains a request body Fastify already consumed and, 500 ms later, calls
+  // net.Socket#destroySoon. light-my-request's mock socket lacks it, so long tests crashed; real sockets are unaffected.
+  app.addHook('onRequest', async request => { const socket = request.raw.socket as { destroySoon?: () => void }; socket.destroySoon ??= () => undefined; });
   apps.add(app);
   return app;
 }
@@ -622,6 +625,71 @@ describe('MCP transport', () => {
     const huge = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: detail.asset.projectId, name: 'Huge', type: 'prop', width: 130, height: 130 } })).json<AssetDetail>();
     const rejected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: huge.asset.id, scales: [1, 32] } });
     expect(JSON.parse(rejected.content[0].text!)).toMatchObject({ error: { code: 'RENDER_SIZE' } });
+  });
+
+  it('creates, inspects as one sheet, reviews, finishes and exports an animation through MCP', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      return result;
+    };
+    const run = (await call('start_run', { projectId: project.id, prompt: 'Two-frame bounce' })).structuredContent as unknown as ArtistRun;
+    const created = (await call('create_asset', { projectId: project.id, runId: run.id, name: 'Slime', type: 'character', width: 4, height: 3, frames: [{ id: 'up', durationMs: 150 }, { id: 'down' }], animationTags: [{ name: 'bounce', from: 0, to: 1, direction: 'pingpong' }] })).structuredContent as unknown as AssetDetail;
+    expect(created.revision.document).toMatchObject({ frames: [{ id: 'up', durationMs: 150 }, { id: 'down', durationMs: 100 }], tags: [{ name: 'bounce', from: 0, to: 1, direction: 'pingpong', loop: true }] });
+    expect(JSON.stringify(created.revision.document)).not.toContain('cels');
+    const drawn = (await call('apply_operations', { assetId: created.asset.id, expectedRevision: created.revision.id, requestId: 'slime-up', runId: run.id, editScope: { layerIds: ['body'], frameIds: ['up'] }, operations: [{ op: 'rows', layerId: 'body', x: 0, y: 0, rows: ['.11.', '1221', '1111'] }] })).structuredContent!;
+    expect(drawn).toMatchObject({ diff: { changedFrames: ['up'] }, validation: { issues: [{ code: 'EMPTY_FRAME' }] }, frames: [{ id: 'up' }, { id: 'down' }] });
+    const squashed = (await call('apply_operations', { assetId: created.asset.id, expectedRevision: drawn.revisionId, requestId: 'slime-down', runId: run.id, editScope: { layerIds: ['body'], frameIds: ['down'] }, operations: [
+      { op: 'stamp', layerId: 'body', sourceFrameId: 'up', rect: { x: 0, y: 1, width: 4, height: 2 } },
+      { op: 'rows', layerId: 'body', x: 0, y: 0, rows: ['....'] },
+    ] })).structuredContent!;
+    const frameRead = (await call('read_pixels', { assetId: created.asset.id, frameId: 'down' })).structuredContent!;
+    expect(frameRead).toMatchObject({ frameId: 'down', rows: ['....', '1221', '1111'] });
+
+    const partial = await call('inspect_asset', { assetId: created.asset.id, runId: run.id, frameId: 'down', scales: [1] });
+    expect(partial.structuredContent).toMatchObject({ imageWidth: 4, imageHeight: 3, view: { layout: 'frame', frameIds: ['down'] } });
+    await call('record_review', { runId: run.id, revisionId: squashed.revisionId, observations: 'Only the squashed frame was checked.', issues: [] });
+    const blocked = await rpc<ToolResult>(app, 'tools/call', { name: 'finish_run', arguments: { runId: run.id, status: 'completed' } });
+    expect(JSON.parse(blocked.content[0].text!)).toMatchObject({ error: { code: 'REVIEW_REQUIRED' } });
+
+    const sheet = await call('inspect_asset', { assetId: created.asset.id, runId: run.id, scales: [1, 4], onion: { before: 1 } });
+    const images = sheet.content.filter(content => content.type === 'image').map(image => PNG.sync.read(Buffer.from(image.data!, 'base64')));
+    expect(images.map(png => [png.width, png.height])).toEqual([[9, 3], [36, 12]]);
+    expect(sheet.structuredContent).toMatchObject({ view: { layout: 'sheet', frameIds: ['up', 'down'], columns: 2, rows: 1, gutter: 1, gutterColor: '#FF00FF', cells: [{ frameId: 'up', x: 0, durationMs: 150 }, { frameId: 'down', x: 5, durationMs: 100 }], onion: { before: 1, after: 0 } } });
+    expect([...images[0].data.subarray(4 * 4, 4 * 4 + 4)]).toEqual([255, 0, 255, 255]);
+    expect([...images[0].data.subarray(6 * 4, 6 * 4 + 4)]).toEqual([48, 96, 255, 255]);
+    await call('record_review', { runId: run.id, revisionId: squashed.revisionId, observations: 'Both frames read as the same slime; the squash keeps the base on the pivot line.', issues: [] });
+    expect((await call('finish_run', { runId: run.id, status: 'completed' })).structuredContent).toMatchObject({ status: 'completed', inspectedFrameIds: ['up', 'down'] });
+
+    const filtered = (await call('get_asset', { assetId: created.asset.id, includePixels: true, frameIds: ['down'] })).structuredContent as unknown as AssetDetail;
+    expect(filtered.revision.document.frames.map(frame => frame.id)).toEqual(['down']);
+    expect(filtered.revision.document.frames[0].cels.body).toEqual([0, 0, 0, 0, 1, 2, 2, 1, 1, 1, 1, 1]);
+    const unknown = await rpc<ToolResult>(app, 'tools/call', { name: 'get_asset', arguments: { assetId: created.asset.id, frameIds: ['side'] } });
+    expect(JSON.parse(unknown.content[0].text!)).toMatchObject({ error: { code: 'UNKNOWN_FRAME' } });
+
+    const exported = (await call('export_asset', { assetId: created.asset.id, format: 'sheet' })).structuredContent as { files: { path: string; downloadUrl: string }[] };
+    expect(exported.files.map(file => file.path.split(/[\\/]/).at(-1))).toEqual([expect.stringMatching(/^Slime-.*\.sheet\.png$/), expect.stringMatching(/^Slime-.*\.sheet\.json$/)]);
+    expect(exported.files[1].downloadUrl).toContain('format=sheet-json');
+    const png = PNG.sync.read((await app.inject(`/api/assets/${created.asset.id}/export?format=sheet`)).rawPayload);
+    expect([png.width, png.height]).toEqual([8, 3]);
+    const aseprite = (await app.inject(`/api/assets/${created.asset.id}/export?format=sheet-json&tag=bounce`)).json();
+    expect(aseprite).toMatchObject({ frames: [{ frame: { x: 0, y: 0, w: 4, h: 3 }, duration: 150 }, { frame: { x: 4, y: 0, w: 4, h: 3 }, duration: 100 }], meta: { frameTags: [{ name: 'bounce', from: 0, to: 1, direction: 'pingpong' }] } });
+    const unity = (await app.inject(`/api/assets/${created.asset.id}/export?format=unity`)).json();
+    expect(unity).toMatchObject({ textureImporter: { spriteMode: 'Multiple' }, sprites: [{ name: 'Slime_up' }, { name: 'Slime_down' }], clips: [{ name: 'bounce', direction: 'pingpong' }] });
+    const single = PNG.sync.read((await app.inject(`/api/assets/${created.asset.id}/export?format=png&frameId=down`)).rawPayload);
+    expect([...single.data.subarray(0, 4)]).toEqual([0, 0, 0, 0]);
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=gifv`)).statusCode).toBe(400);
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=sheet&tag=missing`)).json()).toMatchObject({ error: { code: 'UNKNOWN_TAG' } });
+  });
+
+  it('requires a frame for drawing in animations and rejects a frame layout for several frames', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 2, frames: [{ id: 'a' }, { id: 'b' }] } })).structuredContent as unknown as AssetDetail;
+    const missing = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: created.asset.id, expectedRevision: created.revision.id, requestId: 'no-frame', editScope: { layerIds: ['body'] }, operations: [{ op: 'pixels', layerId: 'body', points: [[0, 0, 1]] }] } });
+    expect(JSON.parse(missing.content[0].text!)).toMatchObject({ error: { code: 'FRAME_REQUIRED' } });
+    const layout = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: created.asset.id, layout: 'frame' } });
+    expect(JSON.parse(layout.content[0].text!)).toMatchObject({ error: { code: 'INVALID_LAYOUT' } });
   });
 
   it('returns safe tool errors for malformed input and engine rejection without adding a revision', async () => {
