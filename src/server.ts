@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { Store, AppError } from './store.js';
 import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
-import { renderPng, importPng, unityManifest } from './images.js';
+import { renderPng, renderThumbnail, importPng, unityManifest } from './images.js';
 import * as schema from './contracts.js';
 import type { McpAgent, McpStatus } from './types.js';
 
@@ -78,6 +78,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   app.get('/api/projects', () => store.listProjects());
   app.post('/api/projects', request => store.createProject(request.body));
   app.patch<{ Params: { id: string } }>('/api/projects/:id', request => store.updateProject(request.params.id, request.body));
+  app.delete<{ Params: { id: string } }>('/api/projects/:id', request => store.deleteProject(request.params.id));
   app.get<{ Querystring: { projectId: string; q?: string; type?: string } }>('/api/assets', request => {
     if (!request.query.projectId) throw new AppError('PROJECT_REQUIRED', 'projectId ist erforderlich.');
     const input = schema.assetSearch.parse(request.query);
@@ -85,8 +86,13 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   });
   app.post('/api/assets', request => store.createAsset(request.body));
   app.get<{ Params: { id: string } }>('/api/assets/:id', request => store.getAsset(request.params.id));
+  app.delete<{ Params: { id: string } }>('/api/assets/:id', request => store.deleteAsset(request.params.id));
   app.post<{ Params: { id: string } }>('/api/assets/:id/operations', request => store.apply(request.params.id, request.body));
-  app.get<{ Params: { id: string } }>('/api/assets/:id/revisions', request => store.listRevisions(request.params.id));
+  app.get<{ Params: { id: string }; Querystring: { summary?: string } }>('/api/assets/:id/revisions', request => {
+    const { summary } = z.object({ summary: z.enum(['true', 'false']).optional() }).strict().parse(request.query);
+    return summary === 'true' ? store.listRevisionSummaries(request.params.id) : store.listRevisions(request.params.id);
+  });
+  app.get<{ Params: { id: string; revisionId: string } }>('/api/assets/:id/revisions/:revisionId', request => store.getRevision(request.params.id, request.params.revisionId));
   app.post<{ Params: { id: string } }>('/api/assets/:id/restore', request => store.restore(request.params.id, request.body));
   app.post<{ Params: { id: string } }>('/api/assets/:id/variant', request => {
     const body = z.object({ name: z.string().trim().min(1).max(160) }).strict().parse(request.body);
@@ -95,6 +101,11 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   app.get<{ Params: { id: string }; Querystring: { scale?: string; revisionId?: string } }>('/api/assets/:id/png', (request, reply) => {
     const revision = store.getRevision(request.params.id, request.query.revisionId);
     return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderPng(revision.document, request.query.scale ? Number(request.query.scale) : 1));
+  });
+  app.get<{ Params: { id: string }; Querystring: { revisionId?: string } }>('/api/assets/:id/thumbnail', (request, reply) => {
+    const { revisionId } = z.object({ revisionId: z.string().min(1).max(100).optional() }).strict().parse(request.query);
+    const revision = store.getRevision(request.params.id, revisionId);
+    return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderThumbnail(revision.document));
   });
   app.get<{ Params: { id: string }; Querystring: { format?: string } }>('/api/assets/:id/export', (request, reply) => {
     const format = z.enum(['png', 'json', 'unity']).parse(request.query.format ?? 'png');

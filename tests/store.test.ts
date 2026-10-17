@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { AppError, Store } from '../src/store.js';
 import type { ApplyRequest, AssetDetail } from '../src/types.js';
 
@@ -105,6 +106,142 @@ describe('transaction boundaries', () => {
     appError(() => store.createAsset({ projectId: project.id, name: 'Must roll back', type: 'item', runId: run.id }), 'RUN_ASSET');
     expect(store.listAssets(project.id)).toEqual(before);
     expect(store.getRun(run.id)).toEqual(run);
+  });
+});
+
+describe('asset and project deletion', () => {
+  it('removes asset history, replay requests and attached runs while retaining independent variants', () => {
+    const { store, project, detail } = setup();
+    const run = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Draw skeleton' });
+    const edit = request(detail, 'delete-paint', { runId: run.id });
+    const painted = store.apply(detail.asset.id, edit);
+    store.restore(detail.asset.id, { revisionId: detail.revision.id, expectedRevision: painted.revision.id, requestId: 'delete-restore' });
+    const variant = store.createVariant(detail.asset.id, 'Independent variant');
+    const projectRun = store.startRun({ projectId: project.id, prompt: 'Another task' });
+    const changes: unknown[] = []; store.on('change', event => changes.push(event));
+
+    expect(store.deleteAsset(detail.asset.id)).toEqual({ id: detail.asset.id, projectId: project.id });
+    appError(() => store.getAsset(detail.asset.id), 'NOT_FOUND', 404);
+    appError(() => store.getRevision(detail.asset.id, detail.revision.id), 'NOT_FOUND', 404);
+    appError(() => store.apply(detail.asset.id, edit), 'NOT_FOUND', 404);
+    appError(() => store.getRun(run.id), 'NOT_FOUND', 404);
+    expect(store.getRun(projectRun.id)).toEqual(projectRun);
+    const retained = store.getAsset(variant.asset.id);
+    expect(retained.asset.sourceAssetId).toBeUndefined();
+    expect(retained.revision).toEqual(variant.revision);
+    expect(store.db.prepare('SELECT id FROM requests').all()).toEqual([]);
+    expect(store.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(changes).toEqual([{ type: 'asset-deleted', projectId: project.id, assetId: detail.asset.id }]);
+    appError(() => store.deleteAsset(detail.asset.id), 'NOT_FOUND', 404);
+    expect(changes).toHaveLength(1);
+    expect(store.importProject(store.exportProject(project.id)).id).not.toBe(project.id);
+  });
+
+  it('removes a whole project and all its dependent data without touching another project', () => {
+    const { store, project, detail } = setup();
+    const edit = request(detail, 'project-delete-paint');
+    store.apply(detail.asset.id, edit);
+    const variant = store.createVariant(detail.asset.id, 'Variant');
+    store.startRun({ projectId: project.id, assetId: variant.asset.id, prompt: 'Draw variant' });
+    store.startRun({ projectId: project.id, prompt: 'Unassigned task' });
+    const other = store.createProject({ name: 'Keep project' });
+    const kept = store.createAsset({ projectId: other.id, name: 'Keep asset', type: 'item', width: 8, height: 8 });
+    const keptRun = store.startRun({ projectId: other.id, assetId: kept.asset.id, prompt: 'Keep task' });
+    const keptRequest = request(kept, 'keep-paint');
+    const keptResult = store.apply(kept.asset.id, keptRequest);
+    const changes: unknown[] = []; store.on('change', event => changes.push(event));
+
+    expect(store.deleteProject(project.id)).toEqual({ id: project.id });
+    expect(store.listProjects()).toEqual([other]);
+    expect(store.listAssets(other.id)).toEqual([keptResult.asset]);
+    expect(store.getAsset(kept.asset.id)).toEqual({ asset: keptResult.asset, revision: keptResult.revision });
+    expect(store.apply(kept.asset.id, keptRequest)).toEqual(keptResult);
+    expect(store.listRuns()).toEqual([keptRun]);
+    expect(store.db.prepare('SELECT id FROM requests').all()).toEqual([{ id: `${kept.asset.id}:keep-paint` }]);
+    expect(store.db.prepare('SELECT asset_id FROM revisions').all().map(row => row.asset_id)).toEqual([kept.asset.id, kept.asset.id]);
+    expect(store.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    expect(changes[0]).toEqual({ type: 'project-deleted', projectId: project.id, assetId: undefined });
+    appError(() => store.getProject(project.id), 'NOT_FOUND', 404);
+    appError(() => store.getAsset(variant.asset.id), 'NOT_FOUND', 404);
+    appError(() => store.apply(detail.asset.id, edit), 'NOT_FOUND', 404);
+    appError(() => store.deleteProject(project.id), 'NOT_FOUND', 404);
+  });
+
+  it.each(['asset', 'project'] as const)('rolls back all cleanup and emits no event when %s deletion fails', target => {
+    const { store, project, detail } = setup();
+    const run = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Draw skeleton' });
+    const edit = request(detail, 'retained-request', { runId: run.id });
+    const painted = store.apply(detail.asset.id, edit);
+    const variant = store.createVariant(detail.asset.id, 'Retained variant');
+    const before = store.exportProject(project.id);
+    const changes: unknown[] = []; store.on('change', event => changes.push(event));
+    store.db.exec(`CREATE TRIGGER fail_delete BEFORE DELETE ON ${target === 'asset' ? 'assets' : 'projects'} BEGIN SELECT RAISE(ABORT, 'simulated deletion failure'); END;`);
+
+    expect(() => target === 'asset' ? store.deleteAsset(detail.asset.id) : store.deleteProject(project.id)).toThrow('simulated deletion failure');
+    expect(store.exportProject(project.id)).toEqual(before);
+    expect(store.getAsset(variant.asset.id)).toEqual(variant);
+    expect(changes).toEqual([]);
+    expect(store.apply(detail.asset.id, edit)).toEqual(painted);
+  });
+});
+
+describe('revision summaries', () => {
+  it('lists newest-first metadata and retrieves historical rasters separately', () => {
+    const { store, project, detail } = setup();
+    const run = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Draw skeleton' });
+    const painted = store.apply(detail.asset.id, request(detail, 'history-summary', { runId: run.id }));
+    const summaries = store.listRevisionSummaries(detail.asset.id);
+    expect(summaries).toEqual([painted.revision, detail.revision].map(({ id, assetId, parentId, label, actor, createdAt }) => ({ id, assetId, parentId, label, actor, createdAt })));
+    expect(store.getRevision(detail.asset.id, detail.revision.id)).toEqual(detail.revision);
+    appError(() => store.listRevisionSummaries('missing'), 'NOT_FOUND', 404);
+  });
+
+  it('persists compact summaries on creation, edits, restore, variants and project import', () => {
+    const { store, project, detail } = setup();
+    const painted = store.apply(detail.asset.id, request(detail, 'persisted-summary'));
+    store.restore(detail.asset.id, { revisionId: detail.revision.id, expectedRevision: painted.revision.id, requestId: 'summary-restore' });
+    store.createVariant(detail.asset.id, 'Summary variant');
+    const imported = store.importProject(store.exportProject(project.id));
+    for (const projectId of [project.id, imported.id]) for (const asset of store.listAssets(projectId)) {
+      expect(store.listRevisionSummaries(asset.id)).toEqual(store.listRevisions(asset.id).map(({ id, assetId, parentId, label, actor, createdAt }) => ({ id, assetId, parentId, label, actor, createdAt })));
+    }
+    expect(store.db.prepare('SELECT id FROM revisions WHERE summary IS NULL').all()).toEqual([]);
+    const summaries = store.listRevisionSummaries(detail.asset.id);
+    store.db.prepare('UPDATE revisions SET data=? WHERE asset_id=?').run('raster JSON is never parsed by the history listing', detail.asset.id);
+    expect(store.listRevisionSummaries(detail.asset.id)).toEqual(summaries);
+  });
+
+  it('atomically migrates a legacy database, backfills summaries once and preserves revision data across reopen', () => {
+    const { project, detail } = setup();
+    const folder = mkdtempSync(join(tmpdir(), 'pixelator-store-')); folders.push(folder);
+    const path = join(folder, 'legacy.sqlite');
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE assets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), data TEXT NOT NULL);
+      CREATE TABLE revisions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id), data TEXT NOT NULL);
+      PRAGMA user_version=1;`);
+    legacy.prepare('INSERT INTO projects(id,data) VALUES(?,?)').run(project.id, JSON.stringify(project));
+    legacy.prepare('INSERT INTO assets(id,project_id,data) VALUES(?,?,?)').run(detail.asset.id, project.id, JSON.stringify(detail.asset));
+    legacy.prepare('INSERT INTO revisions(id,asset_id,data) VALUES(?,?,?)').run(detail.revision.id, detail.asset.id, 'invalid JSON');
+    legacy.close();
+
+    expect(() => open(path)).toThrow('malformed JSON');
+    const failed = new DatabaseSync(path);
+    expect(failed.prepare('PRAGMA table_info(revisions)').all().map(column => column.name)).toEqual(['id', 'asset_id', 'data']);
+    expect(failed.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+    failed.prepare('UPDATE revisions SET data=?').run(JSON.stringify(detail.revision));
+    failed.close();
+
+    const migrated = open(path);
+    expect(migrated.getAsset(detail.asset.id)).toEqual(detail);
+    const { id, assetId, parentId, label, actor, createdAt } = detail.revision;
+    expect(migrated.listRevisionSummaries(detail.asset.id)).toEqual([{ id, assetId, parentId, label, actor, createdAt }]);
+    expect(migrated.db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 2 });
+    const persisted = migrated.db.prepare('SELECT summary,data FROM revisions').get();
+    close(migrated);
+    const reopened = open(path);
+    expect(reopened.db.prepare('SELECT summary,data FROM revisions').get()).toEqual(persisted);
+    expect(reopened.listRevisionSummaries(detail.asset.id)).toEqual([{ id, assetId, parentId, label, actor, createdAt }]);
   });
 });
 

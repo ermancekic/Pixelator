@@ -59,6 +59,7 @@ export interface Revision {
   validation: ValidationReport;
   createdAt: string;
 }
+export type RevisionSummary = Pick<Revision, 'id' | 'assetId' | 'parentId' | 'label' | 'actor' | 'createdAt'>;
 export interface AssetDetail { asset: Asset; revision: Revision }
 export interface EditScope {
   layerIds: string[];

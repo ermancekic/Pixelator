@@ -5,7 +5,7 @@ import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import * as schema from './contracts.js';
 import { applyOperations, createDocument, STYLE_PRESETS, validateDocument } from './engine.js';
-import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDocument, Project, Revision } from './types.js';
+import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDocument, Project, Revision, RevisionSummary } from './types.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -28,12 +28,23 @@ export class Store extends EventEmitter {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;
       CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id), data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id), summary TEXT, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS asset_project ON assets(project_id);
       CREATE INDEX IF NOT EXISTS revision_asset ON revisions(asset_id);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, hash TEXT NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-      PRAGMA user_version=1;`);
+      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, data TEXT NOT NULL);`);
+    try {
+      this.transaction(() => {
+        const columns = this.db.prepare('PRAGMA table_info(revisions)').all() as { name: string }[];
+        const hasSummary = columns.some(column => column.name === 'summary');
+        const { user_version: version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
+        if (!hasSummary) this.db.exec('ALTER TABLE revisions ADD COLUMN summary TEXT');
+        if (!hasSummary || version < 2) this.db.exec("UPDATE revisions SET summary=json_remove(data,'$.document','$.operations','$.validation','$.runId') WHERE summary IS NULL");
+        // Migrated summaries follow large raster payloads; a covering index avoids reading their overflow pages.
+        this.db.exec('CREATE INDEX IF NOT EXISTS revision_summary ON revisions(asset_id,summary)');
+        this.db.exec('PRAGMA user_version=2');
+      });
+    } catch (error) { this.db.close(); throw error; }
     for (const run of this.listRuns()) {
       if (run.status === 'active') this.putRun({ ...run, status: 'interrupted', updatedAt: now() });
     }
@@ -51,6 +62,10 @@ export class Store extends EventEmitter {
   }
   private putAsset(asset: Asset) { this.db.prepare('UPDATE assets SET data=? WHERE id=?').run(JSON.stringify(asset), asset.id); }
   private putRun(run: ArtistRun) { this.db.prepare('INSERT OR REPLACE INTO runs(id,data) VALUES(?,?)').run(run.id, JSON.stringify(run)); }
+  private insertRevision(revision: Revision) {
+    const { id, assetId, parentId, label, actor, createdAt } = revision;
+    this.db.prepare('INSERT INTO revisions(id,asset_id,summary,data) VALUES(?,?,?,?)').run(id, assetId, JSON.stringify({ id, assetId, parentId, label, actor, createdAt }), JSON.stringify(revision));
+  }
   private changed(type: string, projectId: string, assetId?: string) { this.emit('change', { type, projectId, assetId }); }
   listProjects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data)); }
   getProject(id: string): Project { return this.read('projects', id); }
@@ -72,6 +87,19 @@ export class Store extends EventEmitter {
     this.changed('project', id);
     return result;
   }
+  deleteProject(id: string): { id: string } {
+    this.transaction(() => {
+      this.getProject(id);
+      this.db.prepare("UPDATE assets SET data=json_remove(data,'$.sourceAssetId') WHERE json_extract(data,'$.sourceAssetId') IN (SELECT id FROM assets WHERE project_id=?)").run(id);
+      this.db.prepare("DELETE FROM requests WHERE substr(id,1,instr(id,':')-1) IN (SELECT id FROM assets WHERE project_id=?)").run(id);
+      this.db.prepare("DELETE FROM runs WHERE json_extract(data,'$.projectId')=?").run(id);
+      this.db.prepare('DELETE FROM revisions WHERE asset_id IN (SELECT id FROM assets WHERE project_id=?)').run(id);
+      this.db.prepare('DELETE FROM assets WHERE project_id=?').run(id);
+      this.db.prepare('DELETE FROM projects WHERE id=?').run(id);
+    });
+    this.changed('project-deleted', id);
+    return { id };
+  }
   listAssets(projectId: string, q = '', type = ''): Asset[] {
     this.getProject(projectId);
     const words = q.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
@@ -83,6 +111,19 @@ export class Store extends EventEmitter {
     const asset = this.read<Asset>('assets', id);
     return { asset, revision: this.getRevision(id, asset.headRevisionId) };
   }
+  deleteAsset(id: string): { id: string; projectId: string } {
+    const asset = this.transaction(() => {
+      const asset = this.read<Asset>('assets', id);
+      this.db.prepare("UPDATE assets SET data=json_remove(data,'$.sourceAssetId') WHERE json_extract(data,'$.sourceAssetId')=?").run(id);
+      this.db.prepare("DELETE FROM requests WHERE substr(id,1,instr(id,':')-1)=?").run(id);
+      this.db.prepare("DELETE FROM runs WHERE json_extract(data,'$.assetId')=?").run(id);
+      this.db.prepare('DELETE FROM revisions WHERE asset_id=?').run(id);
+      this.db.prepare('DELETE FROM assets WHERE id=?').run(id);
+      return asset;
+    });
+    this.changed('asset-deleted', asset.projectId, id);
+    return { id, projectId: asset.projectId };
+  }
   getRevision(assetId: string, revisionId?: string): Revision {
     const id = revisionId ?? this.read<Asset>('assets', assetId).headRevisionId;
     const revision = this.read<Revision>('revisions', id);
@@ -92,6 +133,10 @@ export class Store extends EventEmitter {
   listRevisions(assetId: string): Revision[] {
     this.getAsset(assetId);
     return (this.db.prepare('SELECT data FROM revisions WHERE asset_id=? ORDER BY rowid DESC').all(assetId) as { data: string }[]).map(row => JSON.parse(row.data));
+  }
+  listRevisionSummaries(assetId: string): RevisionSummary[] {
+    this.read<Asset>('assets', assetId);
+    return (this.db.prepare('SELECT summary FROM revisions INDEXED BY revision_summary WHERE asset_id=? ORDER BY rowid DESC').all(assetId) as { summary: string }[]).map(row => JSON.parse(row.summary));
   }
   private insertAsset(input: CreateAssetInput, document?: PixelDocument, actor: Revision['actor'] = 'human'): AssetDetail {
     const project = this.getProject(input.projectId);
@@ -118,7 +163,7 @@ export class Store extends EventEmitter {
     };
     const revision: Revision = { id: asset.headRevisionId, assetId: asset.id, parentId: null, document: doc, label: actor === 'import' ? 'PNG importiert' : 'Asset angelegt', actor, runId: input.runId, operations: [], validation, createdAt: timestamp };
     this.db.prepare('INSERT INTO assets(id,project_id,data) VALUES(?,?,?)').run(asset.id, asset.projectId, JSON.stringify(asset));
-    this.db.prepare('INSERT INTO revisions(id,asset_id,data) VALUES(?,?,?)').run(revision.id, asset.id, JSON.stringify(revision));
+    this.insertRevision(revision);
     if (input.runId) {
       const run = this.requireActiveRun(input.runId);
       if (run.projectId !== project.id || (run.assetId && run.assetId !== asset.id)) throw new AppError('RUN_ASSET', 'Der Auftrag gehört zu einem anderen Projekt oder Asset.');
@@ -167,7 +212,7 @@ export class Store extends EventEmitter {
     this.db.prepare('INSERT INTO requests(id,hash,data) VALUES(?,?,?)').run(`${assetId}:${requestId}`, hash(payload), JSON.stringify(result));
   }
   private appendRevision(asset: Asset, revision: Revision) {
-    this.db.prepare('INSERT INTO revisions(id,asset_id,data) VALUES(?,?,?)').run(revision.id, asset.id, JSON.stringify(revision));
+    this.insertRevision(revision);
     asset.headRevisionId = revision.id;
     asset.updatedAt = revision.createdAt;
     this.putAsset(asset);
@@ -337,7 +382,7 @@ export class Store extends EventEmitter {
       }
       for (const source of [...bundle.revisions].reverse()) {
         const revision: Revision = { ...source, id: revisions.get(source.id)!, assetId: assets.get(source.assetId)!, parentId: source.parentId ? revisions.get(source.parentId)! : null, runId: source.runId ? runIds.get(source.runId) : undefined, validation: validateDocument(source.document) };
-        this.db.prepare('INSERT INTO revisions(id,asset_id,data) VALUES(?,?,?)').run(revision.id, revision.assetId, JSON.stringify(revision));
+        this.insertRevision(revision);
       }
       for (const source of [...runs].reverse()) {
         const run: ArtistRun = { ...source, id: runIds.get(source.id)!, projectId: project.id, assetId: source.assetId ? assets.get(source.assetId) : undefined, status: source.status === 'active' ? 'interrupted' : source.status, inspectedRevisionId: source.inspectedRevisionId ? revisions.get(source.inspectedRevisionId) : undefined, reviews: source.reviews.map(review => ({ ...review, revisionId: revisions.get(review.revisionId)! })) };

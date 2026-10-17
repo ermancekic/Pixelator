@@ -46,30 +46,39 @@ function paletteIssues(palette: unknown, maxColors: number): Issue[] {
   return [];
 }
 
-function renderUnchecked(doc: PixelDocument): Uint8Array {
-  const result = new Uint8Array(doc.width * doc.height * 4);
-  const palette = doc.palette.map((color, index) => index === 0 ? [0, 0, 0, 0] : [
-    parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16), 255,
-  ]);
+function compositeIndices(doc: PixelDocument): Uint8Array {
+  const result = new Uint8Array(doc.width * doc.height);
   for (const layer of doc.layers) {
     if (!layer.visible) continue;
     for (let i = 0; i < layer.pixels.length; i++) {
-      if (layer.pixels[i] !== 0) result.set(palette[layer.pixels[i]], i * 4);
+      if (layer.pixels[i] !== 0) result[i] = layer.pixels[i];
     }
   }
   return result;
 }
 
-function bounds(indices: Iterable<number>, width: number): Rect | null {
-  let x0 = Infinity; let y0 = Infinity; let x1 = -1; let y1 = -1;
-  for (const i of indices) {
-    const x = i % width; const y = Math.floor(i / width);
-    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+function renderUnchecked(doc: PixelDocument): Uint8Array {
+  const result = new Uint8Array(doc.width * doc.height * 4);
+  const pixels = new Uint32Array(result.buffer);
+  const paletteBytes = new Uint8Array(doc.palette.length * 4);
+  for (let i = 1; i < doc.palette.length; i++) {
+    const color = doc.palette[i];
+    paletteBytes[i * 4] = parseInt(color.slice(1, 3), 16);
+    paletteBytes[i * 4 + 1] = parseInt(color.slice(3, 5), 16);
+    paletteBytes[i * 4 + 2] = parseInt(color.slice(5, 7), 16);
+    paletteBytes[i * 4 + 3] = 255;
   }
-  return x1 < 0 ? null : { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+  const palette = new Uint32Array(paletteBytes.buffer);
+  for (const layer of doc.layers) {
+    if (!layer.visible) continue;
+    for (let i = 0; i < layer.pixels.length; i++) {
+      if (layer.pixels[i] !== 0) pixels[i] = palette[layer.pixels[i]];
+    }
+  }
+  return result;
 }
 
-export function validateDocument(doc: PixelDocument): ValidationReport {
+function validateStructure(doc: PixelDocument): ValidationReport {
   const issues: Issue[] = [];
   const error = (code: string, message: string, layerId?: string) => issues.push({ code, severity: 'error', message, ...(layerId ? { layerId } : {}) });
   const report: ValidationReport = { valid: false, issues, colorCount: 0, opaquePixels: 0, boundingBox: null, isolatedPixels: 0 };
@@ -90,29 +99,42 @@ export function validateDocument(doc: PixelDocument): ValidationReport {
     if (!identifier(layer.id) || ids.has(layer.id)) error('INVALID_LAYER_ID', 'Layer IDs must be unique identifiers.');
     else ids.add(layer.id);
     if (!name(layer.name) || typeof layer.visible !== 'boolean' || typeof layer.locked !== 'boolean') error('INVALID_LAYER', 'Layer name, visibility or lock is invalid.', layer.id);
-    if (!Array.isArray(layer.pixels) || layer.pixels.length !== doc.width * doc.height || Array.from(layer.pixels).some(pixel => !integer(pixel) || pixel < 0 || !Array.isArray(doc.palette) || pixel >= doc.palette.length)) error('INVALID_PIXELS', 'Pixels must contain exactly one valid palette index per canvas cell.', layer.id);
+    let pixelsValid = Array.isArray(layer.pixels) && layer.pixels.length === doc.width * doc.height && Array.isArray(doc.palette);
+    if (pixelsValid) for (let i = 0; i < layer.pixels.length; i++) {
+      const pixel = layer.pixels[i];
+      if (!integer(pixel) || pixel < 0 || pixel >= doc.palette.length) { pixelsValid = false; break; }
+    }
+    if (!pixelsValid) error('INVALID_PIXELS', 'Pixels must contain exactly one valid palette index per canvas cell.', layer.id);
   }
-  if (issues.some(issue => issue.severity === 'error')) return report;
-  const rgba = renderUnchecked(doc);
-  const occupied: number[] = []; const colors = new Set<string>();
-  for (let i = 0; i < doc.width * doc.height; i++) {
-    if (!rgba[i * 4 + 3]) continue;
-    occupied.push(i); colors.add(`${rgba[i * 4]},${rgba[i * 4 + 1]},${rgba[i * 4 + 2]}`);
+  report.valid = !issues.some(issue => issue.severity === 'error');
+  return report;
+}
+
+export function validateDocument(doc: PixelDocument): ValidationReport {
+  const report = validateStructure(doc);
+  if (!report.valid) return report;
+  const indices = compositeIndices(doc); const colors = new Uint8Array(doc.palette.length);
+  let x0 = doc.width; let y0 = doc.height; let x1 = -1; let y1 = -1;
+  for (let i = 0; i < indices.length; i++) {
+    if (!indices[i]) continue;
+    report.opaquePixels++; colors[indices[i]] = 1;
     const x = i % doc.width; const y = Math.floor(i / doc.width);
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
     let neighbor = false;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if ((dx || dy) && x + dx >= 0 && x + dx < doc.width && y + dy >= 0 && y + dy < doc.height && rgba[((y + dy) * doc.width + x + dx) * 4 + 3]) neighbor = true;
+    for (let dy = -1; dy <= 1 && !neighbor; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if ((dx || dy) && x + dx >= 0 && x + dx < doc.width && y + dy >= 0 && y + dy < doc.height && indices[(y + dy) * doc.width + x + dx]) { neighbor = true; break; }
     }
     if (!neighbor) report.isolatedPixels++;
   }
-  report.valid = true; report.colorCount = colors.size; report.opaquePixels = occupied.length; report.boundingBox = bounds(occupied, doc.width);
-  if (!occupied.length) issues.push({ code: 'EMPTY_ASSET', severity: 'warning', message: 'Asset has no visible pixels.' });
-  if (report.isolatedPixels) issues.push({ code: 'ISOLATED_PIXELS', severity: 'warning', message: `${report.isolatedPixels} visible pixels have no opaque neighbor.` });
+  report.colorCount = colors.reduce((count, used) => count + used, 0);
+  report.boundingBox = x1 < 0 ? null : { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+  if (!report.opaquePixels) report.issues.push({ code: 'EMPTY_ASSET', severity: 'warning', message: 'Asset has no visible pixels.' });
+  if (report.isolatedPixels) report.issues.push({ code: 'ISOLATED_PIXELS', severity: 'warning', message: `${report.isolatedPixels} visible pixels have no opaque neighbor.` });
   return report;
 }
 
 function assertDocument(doc: PixelDocument): void {
-  const report = validateDocument(doc);
+  const report = validateStructure(doc);
   const error = report.issues.find(issue => issue.severity === 'error');
   if (error) fail(error.code, error.message);
 }
@@ -143,15 +165,27 @@ export function composite(doc: PixelDocument): Uint8Array {
   return renderUnchecked(doc);
 }
 
-export function applyOperations(original: PixelDocument, operations: Operation[], editScope: EditScope): {
+type AppliedOperations = {
   document: PixelDocument; diff: PixelDiff; validation: ValidationReport;
-} {
+};
+
+export function applyOperations(original: PixelDocument, operations: Operation[], editScope: EditScope): AppliedOperations {
+  return editDocument(original, operations, editScope, false);
+}
+
+export function previewOperations(original: PixelDocument, operations: Operation[], editScope: EditScope): PixelDocument {
+  return editDocument(original, operations, editScope, true);
+}
+
+function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: true): PixelDocument;
+function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: false): AppliedOperations;
+function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: boolean): PixelDocument | AppliedOperations {
   assertDocument(original);
   requireValue(Array.isArray(operations) && operations.length >= 1 && operations.length <= MAX_OPERATIONS, 'INVALID_BATCH', `A batch must contain 1..${MAX_OPERATIONS} operations.`);
   requireValue(object(editScope) && Array.isArray(editScope.layerIds) && editScope.layerIds.length > 0 && editScope.layerIds.length <= MAX_LAYERS && Array.from(editScope.layerIds).every(identifier) && new Set(editScope.layerIds).size === editScope.layerIds.length, 'INVALID_SCOPE', 'Scope must contain unique layer IDs.');
   requireValue(editScope.allowLayerChanges === undefined || typeof editScope.allowLayerChanges === 'boolean', 'INVALID_SCOPE', 'allowLayerChanges must be boolean.');
   requireValue(editScope.allowPaletteChanges === undefined || typeof editScope.allowPaletteChanges === 'boolean', 'INVALID_SCOPE', 'allowPaletteChanges must be boolean.');
-  const doc = structuredClone(original);
+  const doc: PixelDocument = { ...original, palette: [...original.palette], pivot: { ...original.pivot }, layers: original.layers.map(layer => ({ ...layer, pixels: layer.pixels.slice() })) };
   const canvas: Rect = { x: 0, y: 0, width: doc.width, height: doc.height };
   const rect = (value: unknown): Rect => {
     requireValue(object(value) && integer(value.x) && integer(value.y) && integer(value.width) && integer(value.height) && value.width >= 1 && value.height >= 1 && value.x >= 0 && value.y >= 0 && value.x + value.width <= doc.width && value.y + value.height <= doc.height, 'INVALID_RECT', 'Rectangle must have positive integer dimensions inside the canvas.');
@@ -250,7 +284,9 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
           requireValue(inside(canvas, x, y), 'OUT_OF_BOUNDS', 'Polygon vertices must be inside the canvas.');
           return [x, y];
         });
-        for (let y = 0; y < doc.height; y++) for (let x = 0; x < doc.width; x++) {
+        const minX = Math.min(...points.map(point => point[0])); const maxX = Math.max(...points.map(point => point[0]));
+        const minY = Math.min(...points.map(point => point[1])); const maxY = Math.max(...points.map(point => point[1]));
+        for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
           let selected = false;
           for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
             const [xi, yi] = points[i]; const [xj, yj] = points[j];
@@ -271,12 +307,7 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
         const x = coordinate(operation.x); const y = coordinate(operation.y);
         requireValue(inside(canvas, x, y), 'OUT_OF_BOUNDS', 'Fill start must be inside the canvas.');
         requireValue(!scopeRect || inside(scopeRect, x, y), 'SCOPE_VIOLATION', 'Fill start must be inside the edit rectangle.');
-        const source = operation.reference === 'composite' ? new Array<number>(doc.width * doc.height).fill(0) : layer.pixels.slice();
-        if (operation.reference === 'composite') for (const referenceLayer of doc.layers) {
-          if (referenceLayer.visible) for (let i = 0; i < source.length; i++) {
-            if (referenceLayer.pixels[i] !== 0) source[i] = referenceLayer.pixels[i];
-          }
-        }
+        const source = operation.reference === 'composite' ? compositeIndices(doc) : layer.pixels;
         const from = source[y * doc.width + x];
         if (from === value && operation.reference !== 'composite') break;
         if (operation.contiguous === false) {
@@ -286,18 +317,22 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
           }
           break;
         }
-        const queue = [y * doc.width + x]; const seen = new Set<number>();
+        const area = scopeRect ?? canvas;
+        const queue: number[] = [];
+        const seen = operation.reference === 'composite' ? new Uint8Array(source.length) : undefined;
+        const enqueue = (position: number) => {
+          if (source[position] !== from || seen?.[position]) return;
+          if (seen) seen[position] = 1;
+          write(layer, position % doc.width, Math.floor(position / doc.width), value);
+          queue.push(position);
+        };
+        enqueue(y * doc.width + x);
         for (let i = 0; i < queue.length; i++) {
-          const position = queue[i];
-          if (seen.has(position) || source[position] !== from) continue;
-          seen.add(position);
-          const px = position % doc.width; const py = Math.floor(position / doc.width);
-          if (scopeRect && !inside(scopeRect, px, py)) continue;
-          write(layer, px, py, value);
-          if (px > 0) queue.push(position - 1);
-          if (px + 1 < doc.width) queue.push(position + 1);
-          if (py > 0) queue.push(position - doc.width);
-          if (py + 1 < doc.height) queue.push(position + doc.width);
+          const position = queue[i]; const px = position % doc.width; const py = Math.floor(position / doc.width);
+          if (px > area.x) enqueue(position - 1);
+          if (px + 1 < area.x + area.width) enqueue(position + 1);
+          if (py > area.y) enqueue(position - doc.width);
+          if (py + 1 < area.y + area.height) enqueue(position + doc.width);
         }
         break;
       }
@@ -398,15 +433,19 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
     }
   }
 
+  if (preview) {
+    assertDocument(doc);
+    return doc;
+  }
   const validation = validateDocument(doc);
   requireValue(validation.valid, validation.issues[0]?.code ?? 'INVALID_DOCUMENT', validation.issues[0]?.message ?? 'Invalid operation result.');
-  const before = renderUnchecked(original); const after = renderUnchecked(doc);
-  const changedPositions = new Set<number>(); const changedLayers: string[] = [];
+  const before = compositeIndices(original); const after = compositeIndices(doc);
+  const beforePalette = original.palette.map(color => color.toUpperCase()); const afterPalette = doc.palette.map(color => color.toUpperCase());
+  const changedPositions = new Uint8Array(before.length); const changedLayers: string[] = [];
   for (let i = 0; i < doc.width * doc.height; i++) {
-    const rgbaChanged = before.subarray(i * 4, i * 4 + 4).some((value, channel) => value !== after[i * 4 + channel]);
-    if (rgbaChanged) {
+    if (beforePalette[before[i]] !== afterPalette[after[i]]) {
       requireValue(!scopeRect || inside(scopeRect, i % doc.width, Math.floor(i / doc.width)), 'SCOPE_VIOLATION', 'Rendered pixels changed outside the edit rectangle.');
-      changedPositions.add(i);
+      changedPositions[i] = 1;
     }
   }
   const ids = new Set([...original.layers.map(layer => layer.id), ...doc.layers.map(layer => layer.id)]);
@@ -416,11 +455,18 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
     for (let i = 0; i < doc.width * doc.height; i++) {
       const a = oldLayer?.pixels[i] ?? 0; const b = newLayer?.pixels[i] ?? 0;
       if (a !== b || original.palette[a] !== doc.palette[b]) {
-        changed = true; changedPositions.add(i);
+        changed = true; changedPositions[i] = 1;
         requireValue(allowedLayers.has(id) && (!scopeRect || inside(scopeRect, i % doc.width, Math.floor(i / doc.width))), 'SCOPE_VIOLATION', 'Stored pixels changed outside the edit scope.');
       }
     }
     if (changed) changedLayers.push(id);
   }
-  return { document: doc, diff: { changedPixels: changedPositions.size, changedLayers, boundingBox: bounds(changedPositions, doc.width) }, validation };
+  let changedPixels = 0; let x0 = doc.width; let y0 = doc.height; let x1 = -1; let y1 = -1;
+  for (let i = 0; i < changedPositions.length; i++) if (changedPositions[i]) {
+    changedPixels++;
+    const x = i % doc.width; const y = Math.floor(i / doc.width);
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  const boundingBox = x1 < 0 ? null : { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+  return { document: doc, diff: { changedPixels, changedLayers, boundingBox }, validation };
 }

@@ -9,6 +9,7 @@
 .tool-option-hint{color:#6f858e;font-size:8px;margin-left:3px}@media(max-width:1150px){.tool-option-hint{display:none}}
 .inspector-section{flex-shrink:0}
 .preview-options{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px;font-size:9px;color:#95aab5}
+.button.danger{background:#753b3b;border-color:#a35a5a;color:#ffe1e1}.button.danger:hover{background:#934848}.project-picker select{min-width:0}
 .preview-options>label{display:flex;align-items:center;gap:5px}
 .preview-options select{height:25px;font-size:9px;padding:0 4px;max-width:105px}
 .preview-options .preview-tile-option{flex-basis:100%}

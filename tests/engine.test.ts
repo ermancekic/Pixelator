@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyOperations, composite, createDocument, DEFAULT_PALETTE, STYLE_PRESETS, validateDocument } from '../src/engine.js';
+import { applyOperations, composite, createDocument, DEFAULT_PALETTE, previewOperations, STYLE_PRESETS, validateDocument } from '../src/engine.js';
 import type { EditScope, Operation, PixelDocument } from '../src/types.js';
 
 const palette = ['#00000000', '#FF0000', '#0000FF', '#FFFFFF'];
@@ -65,6 +65,15 @@ describe('pixel document validation and composition', () => {
     const removed = run(doc, [{ op: 'remove_layer', layerId: 'sword' }], { layerIds: ['body', 'sword'], allowLayerChanges: true }).document;
     expect([...composite(removed).slice(20, 24)]).toEqual([255, 0, 0, 255]);
   });
+
+  it('counts diagonal neighbors without wrapping across canvas edges', () => {
+    const doc = make(5, 3);
+    doc.layers[0].pixels = [0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 3, 0, 0, 0];
+    expect(validateDocument(doc)).toMatchObject({
+      valid: true, colorCount: 3, opaquePixels: 3, isolatedPixels: 1,
+      boundingBox: { x: 0, y: 0, width: 5, height: 3 },
+    });
+  });
 });
 
 describe('deterministic drawing', () => {
@@ -98,6 +107,15 @@ describe('deterministic drawing', () => {
     const selected = run(make(), [{ op: 'fill', layerId: 'base', x: 1, y: 1, color: 2 }], { layerIds: ['base'], rect: { x: 1, y: 1, width: 2, height: 2 } });
     expect(selected.diff.changedPixels).toBe(4);
     expect(get(selected.document, 0, 0)).toBe(0);
+  });
+
+  it('fills a million-pixel document with exact diagnostics and an independent result', () => {
+    const doc = make(1024, 1024);
+    const filled = run(doc, [{ op: 'fill', layerId: 'base', x: 1023, y: 1023, color: 2 }]);
+    expect(filled.diff).toEqual({ changedPixels: 1024 * 1024, changedLayers: ['base'], boundingBox: { x: 0, y: 0, width: 1024, height: 1024 } });
+    expect(filled.validation).toMatchObject({ valid: true, colorCount: 1, opaquePixels: 1024 * 1024, isolatedPixels: 0 });
+    expect(filled.document.layers[0].pixels.every(value => value === 2)).toBe(true);
+    expect(doc.layers[0].pixels.every(value => value === 0)).toBe(true);
   });
 
   it('fills disconnected equal indices globally within the selection', () => {
@@ -173,6 +191,33 @@ describe('deterministic drawing', () => {
 });
 
 describe('local edit guarantees and atomicity', () => {
+  it('previews the same raster while retaining validation, scope and atomicity', () => {
+    const doc = createDocument({ width: 4, height: 4, palette, layers: [{ id: 'base', name: 'Base' }, { id: 'top', name: 'Top' }] });
+    const operations: Operation[] = [{ op: 'rect', layerId: 'base', x: 1, y: 1, width: 2, height: 2, color: 1 }];
+    const scope = { layerIds: ['base'], rect: { x: 1, y: 1, width: 2, height: 2 } };
+    const preview = previewOperations(doc, operations, scope);
+    expect(preview).toEqual(run(doc, operations, scope).document);
+    preview.layers[1].pixels[0] = 3; preview.palette[1] = '#00FF00'; preview.pivot.x = 0;
+    expect(doc.layers[1].pixels[0]).toBe(0); expect(doc.palette[1]).toBe('#FF0000'); expect(doc.pivot.x).toBe(2);
+    expect(() => previewOperations(doc, [points([[0, 0, 1]])], scope)).toThrow('SCOPE_VIOLATION');
+    expect(() => previewOperations(doc, [points([[1, 1, 1]]), points([[9, 9, 1]])], scope)).toThrow('OUT_OF_BOUNDS');
+    expect(doc.layers[0].pixels.every(value => value === 0)).toBe(true);
+    doc.layers[0].pixels[0] = 3;
+    expect(() => previewOperations(doc, [{ op: 'palette', colors: ['#00000000', '#FF0000'] }], { layerIds: ['base', 'top'], allowPaletteChanges: true })).toThrow('INVALID_PIXELS');
+    delete doc.layers[0].pixels[0];
+    expect(() => previewOperations(doc, operations, scope)).toThrow('INVALID_PIXELS');
+  });
+
+  it('includes rendered visibility changes and stored palette changes in the pixel diff', () => {
+    const doc = createDocument({ width: 3, height: 1, palette, layers: [{ id: 'base', name: 'Base' }, { id: 'top', name: 'Top' }] });
+    doc.layers[0].pixels = [1, 0, 1]; doc.layers[1].pixels = [2, 2, 0];
+    const hidden = run(doc, [{ op: 'update_layer', layerId: 'top', visible: false }], { layerIds: ['base', 'top'], allowLayerChanges: true });
+    expect(hidden.diff).toEqual({ changedPixels: 2, changedLayers: ['top'], boundingBox: { x: 0, y: 0, width: 2, height: 1 } });
+    const changed = run(doc, [{ op: 'palette', colors: ['#00000000', '#ff0000', '#0000FF', '#FFFFFF'] }], { layerIds: ['base', 'top'], allowPaletteChanges: true });
+    expect(composite(changed.document)).toEqual(composite(doc));
+    expect(changed.diff).toEqual({ changedPixels: 2, changedLayers: ['base'], boundingBox: { x: 0, y: 0, width: 3, height: 1 } });
+  });
+
   it('recolors only the selected red armor, leaving equal red eye pixels unchanged', () => {
     const initial = run(make(), [points([[0, 0, 1], [1, 2, 1], [2, 2, 1]])]).document;
     const edited = run(initial, [{ op: 'replace', layerId: 'base', from: 1, to: 2 }], { layerIds: ['base'], rect: { x: 1, y: 2, width: 2, height: 1 } });
