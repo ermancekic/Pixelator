@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { serverMessage, setActiveLanguage, t, translate } from '../web/i18n.js';
 import { EN, SERVER_DE, STORED_LABELS } from '../web/translations.js';
@@ -7,7 +8,7 @@ import { fitScale } from '../web/view-helpers.js';
 import { translationKeys } from './i18n-keys.js';
 
 const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
-const keys = translationKeys(new URL('../web', import.meta.url).pathname);
+const keys = translationKeys(fileURLToPath(new URL('../web', import.meta.url)));
 
 describe('interface translations', () => {
   afterEach(() => setActiveLanguage('en'));

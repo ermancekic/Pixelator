@@ -6,10 +6,10 @@ Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raste
 
 Am 17. Oktober 2026 bestanden **229 Tests in 16 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Jeder Oberflächentext aus `t()`/`msg()` hat eine englische Übersetzung mit denselben Platzhaltern, ohne verwaiste Einträge; statische und dynamische Servermeldungen werden für die deutsche Oberfläche übersetzt; Einstellungen aus dem Browser-Speicher werden geprüft; Einpassen-Zoom und die Kürzel `Strg+,`, `Strg+B`, `Strg+J`. Servermeldungen sind jetzt englisch, auch für MCP-Clients.
 
-**Browser** (Chromium über Playwright, eigener Datenordner) mit 21 Prüfungen, dreimal in Folge bestanden:
+**Browser** (Chromium über Playwright, eigener Datenordner) mit 21 Prüfungen, mehrfach in Folge bestanden:
 - Englische Menüleiste und `lang="en"` beim ersten Start; Menüs per Maus und Tastatur.
 - Kein deutscher Text in der englischen Oberfläche: Editor, alle Werkzeuge, Menüs, Exportformate, Kachelbereich und alle Dialoge.
-- Animationsleiste, Eigenschaften und Bibliothek aus- und einblenden (Menü, `Strg+J`, `Strg+B`), auch nach Neuladen.
+- Animationsleiste, Eigenschaften und Bibliothek aus- und einblenden (Menü, `Strg+J`, `Strg+B`), auch nach Neuladen; „Fensteraufteilung zurücksetzen“ stellt eine verbreiterte Bibliothek wieder her, die Zeichenfläche bleibt gezeichnet.
 - Export: PNG mit Größe und Frame; Download mit Dateinamen schließt das Fenster; Einstellungen bleiben erhalten; Sheet-Vorschau und Tileset-Vorschau (Extrude 1, Abstand 2) pixelgleich zur Datei; `.tsx`-Vorschau gleich dem Download; Sheet mit JSON lädt beide Dateien; unpassende Formate gesperrt.
 - Die Vorschau passt ein 512×384-Bild bei 29 % ein; 1× zeigt 512 px.
 - Umschalten auf Deutsch übersetzt Menüs, den Verlaufseintrag „Asset angelegt“ und die Servermeldung „Eine gültige PNG-Datei ist erforderlich.“ und bleibt nach Neuladen.

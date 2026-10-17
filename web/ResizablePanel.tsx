@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from 'react';
 import { useT } from './i18n';
+import { PANELS_RESET } from './settings';
 
 interface ResizablePanelProps {
   id: string;
@@ -30,6 +31,10 @@ export function ResizablePanel({ id, label, className, as: Tag = 'section', edge
     } catch { return null; }
   });
   const [bounds, setBounds] = useState({ size: minSize, max: Number.MAX_SAFE_INTEGER });
+  useEffect(() => {
+    const reset = () => setPreferredSize(null);
+    window.addEventListener(PANELS_RESET, reset); return () => window.removeEventListener(PANELS_RESET, reset);
+  }, []);
 
   const measure = useCallback(() => {
     const panel = panelRef.current;
