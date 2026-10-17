@@ -83,3 +83,4 @@
 .tag-row input:not([type=checkbox]){flex:1;min-width:80px;height:30px;font-size:11px}.tag-row select{height:30px;font-size:10px;padding:0 4px}.tag-row>span{color:#6f8994}
 @media(max-height:760px){.timeline-thumb{width:30px;height:30px}.agent-panel{min-height:110px;padding-top:14px;padding-bottom:14px}}
 @media(max-width:650px){.tags-modal{width:420px}.tag-row{flex-wrap:wrap}}
+.export-links{flex-wrap:wrap;row-gap:8px}

@@ -4,7 +4,7 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as schema from './contracts.js';
 import { AppError, Store } from './store.js';
-import { framesFor, renderPng, renderSheet, sheetLayout, sheetManifest, unityManifest, unitySheetManifest } from './images.js';
+import { framesFor, renderGif, renderPng, renderSheet, sheetLayout, sheetManifest, unityManifest, unitySheetManifest } from './images.js';
 import { MAX_FRAMES, MAX_TAGS, readIndices, STYLE_PRESETS, validateDocument } from './engine.js';
 import { encodeRows, MAX_READ_CELLS, ROW_ALPHABET, rowLegend } from './raster-text.js';
 import type { ApplyResult, AssetDetail, Revision, ValidationReport } from './types.js';
@@ -135,16 +135,17 @@ export function createMcpServer(store: Store, exportDir: string, baseUrl: string
   tool('list_revisions', 'List immutable revisions. inspect_asset can render a selected revision. Restoring creates a new revision and preserves history.', assetIdInput, input => ({ revisions: store.listRevisions(input.assetId).map(rev => ({ id: rev.id, parentId: rev.parentId, label: rev.label, actor: rev.actor, createdAt: rev.createdAt, validation: rev.validation })) }), true);
   tool('restore_revision', 'Restore an earlier whole-asset state as a new revision. This is a global history operation, not a scoped drawing edit.', schema.restoreInput.extend({ assetId: identifier }), ({ assetId, ...input }) => detailSummary(store.restore(assetId, input)));
   tool('create_variant', 'Duplicate the current asset, retaining indexed raster, style and semantic layers. The new asset records its sourceAssetId.', assetIdInput.extend({ name: z.string().trim().min(1).max(160) }), input => detailSummary(store.createVariant(input.assetId, input.name)));
-  tool('export_asset', 'Export to the local exports folder: png (one frame, default first, true transparency), json (editable project), unity (import metadata; animations describe the sheet with one sprite per frame and one clip per tag), sheet (all frames or one tag as a horizontal sprite sheet PNG plus Aseprite-compatible JSON with durations and frame tags). No preview overlays; no Unity project is modified.', assetIdInput.extend({ format: z.enum(['png', 'json', 'unity', 'sheet']).default('png'), frameId: identifier.optional(), tag: z.string().min(1).max(160).optional(), columns: z.number().int().min(1).max(MAX_FRAMES).optional() }), input => {
+  tool('export_asset', 'Export to the local exports folder: png (one frame, default first, true transparency), json (editable project), unity (import metadata; animations describe the sheet with one sprite per frame and one clip per tag), sheet (all frames or one tag as a horizontal sprite sheet PNG plus Aseprite-compatible JSON with durations and frame tags), gif (animated preview for sharing; a tag plays in its direction and loop mode; scale enlarges it). No preview overlays; no Unity project is modified.', assetIdInput.extend({ format: z.enum(['png', 'json', 'unity', 'sheet', 'gif']).default('png'), frameId: identifier.optional(), tag: z.string().min(1).max(160).optional(), columns: z.number().int().min(1).max(MAX_FRAMES).optional(), scale: z.number().int().min(1).max(16).optional() }), input => {
     const { asset, revision } = store.getAsset(input.assetId); const { document } = revision;
     const base = `${asset.name.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 80) || 'asset'}-${asset.id.slice(-8)}-${revision.id.slice(-8)}${input.tag ? `-${input.tag.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 40)}` : ''}`;
-    const query = new URLSearchParams({ ...(input.frameId ? { frameId: input.frameId } : {}), ...(input.tag ? { tag: input.tag } : {}), ...(input.columns ? { columns: String(input.columns) } : {}) });
+    const query = new URLSearchParams({ ...(input.frameId ? { frameId: input.frameId } : {}), ...(input.tag ? { tag: input.tag } : {}), ...(input.columns ? { columns: String(input.columns) } : {}), ...(input.scale ? { scale: String(input.scale) } : {}) });
     const url = (format: string) => `${baseUrl}/api/assets/${asset.id}/export?${new URLSearchParams({ format, ...Object.fromEntries(query) })}`;
     const sheet = () => renderSheet(document, { frameIds: framesFor(document, input.tag), columns: input.columns });
     const files: { path: string; downloadUrl: string }[] = [];
     const write = (filename: string, bytes: Buffer, format: string) => { const path = join(exportDir, filename); writeFileSync(path, bytes); files.push({ path, downloadUrl: url(format) }); };
     mkdirSync(exportDir, { recursive: true });
     if (input.format === 'png') write(`${base}.png`, renderPng(document, 1, input.frameId), 'png');
+    else if (input.format === 'gif') write(`${base}.gif`, renderGif(document, { tag: input.tag, scale: input.scale }), 'gif');
     else if (input.format === 'json') write(`${base}.pixelator.json`, Buffer.from(JSON.stringify(store.exportAsset(asset.id), null, 2)), 'json');
     else if (input.format === 'unity') {
       const manifest = document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${base}.sheet.png`, layout: sheet().layout }) : unityManifest(asset.id, revision.id, asset.name, document);

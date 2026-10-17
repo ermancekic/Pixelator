@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PNG } from 'pngjs';
 import { applyOperations, composite, createDocument } from '../src/engine.js';
-import { framesFor, importPng, ONION_COLORS, renderPng, renderSheet, renderThumbnail, sheetLayout, sheetManifest, unityManifest, unitySheetManifest } from '../src/images.js';
+import { framesFor, importPng, ONION_COLORS, renderPng, renderSheet, renderThumbnail, sheetLayout, sheetManifest, sliceSheet, unityManifest, unitySheetManifest } from '../src/images.js';
 import { Store } from '../src/store.js';
 import { cel, setCel } from './helpers.js';
 
@@ -219,5 +219,23 @@ describe('animation sheets and engine metadata', () => {
     ]);
     const untagged = { ...doc, tags: [] };
     expect(unitySheetManifest('a', 'r', 'Hero', untagged, { image: 'x.png', layout }).clips).toEqual([{ name: 'Hero', loop: true, direction: 'forward', frames: layout.cells.map(cell => ({ sprite: `Hero_${cell.frameId}`, durationMs: cell.durationMs })) }]);
+  });
+});
+
+describe('sprite sheet import', () => {
+  it('cuts a sheet into frames row by row, drops trailing empty cells and round-trips the own export', () => {
+    const rgba = (index: number) => [[0, 0, 0, 0], [255, 0, 0, 255], [0, 0, 255, 255]][index];
+    // 3 columns x 2 rows of 2x1 cells; the last two cells are empty.
+    const indices = [1, 0, 2, 2, 0, 1, 1, 1, 0, 0, 0, 0];
+    const image = importPng(pngBase64(6, 2, indices.map(rgba)), 4);
+    const doc = sliceSheet(image, 2, 1, { durationMs: 80 });
+    expect([doc.width, doc.height, doc.frames.length]).toEqual([2, 1, 4]);
+    expect(doc.frames.map(frame => frame.cels.import)).toEqual([[1, 0], [2, 2], [0, 1], [1, 1]].map(cell => cell.map(i => image.palette.indexOf(['#00000000', '#FF0000', '#0000FF'][i]))));
+    expect(doc.frames.every(frame => frame.durationMs === 80)).toBe(true);
+    expect(sliceSheet(image, 2, 1, { frameCount: 6 }).frames).toHaveLength(6);
+    expect(() => sliceSheet(image, 4, 1)).toThrow(expect.objectContaining({ code: 'SHEET_SIZE' }));
+    expect(() => sliceSheet(image, 2, 1, { frameCount: 7 })).toThrow(expect.objectContaining({ code: 'SHEET_FRAMES' }));
+    const roundTrip = sliceSheet(importPng(renderSheet(doc).png.toString('base64'), 4), 2, 1);
+    expect(roundTrip.frames.map(frame => frame.cels.import)).toEqual(doc.frames.map(frame => frame.cels.import));
   });
 });

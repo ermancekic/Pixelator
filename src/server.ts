@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { Store, AppError } from './store.js';
 import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
-import { framesFor, renderPng, renderSheet, renderThumbnail, importPng, sheetManifest, unityManifest, unitySheetManifest } from './images.js';
+import { framesFor, renderGif, renderPng, renderSheet, renderThumbnail, importPng, sheetManifest, sliceSheet, unityManifest, unitySheetManifest } from './images.js';
 import * as schema from './contracts.js';
 import type { McpAgent, McpStatus } from './types.js';
 
@@ -108,14 +108,15 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderThumbnail(revision.document));
   });
   app.get<{ Params: { id: string } }>('/api/assets/:id/export', (request, reply) => {
-    const query = z.object({ format: z.enum(['png', 'json', 'unity', 'sheet', 'sheet-json']).default('png'), frameId: z.string().min(1).max(100).optional(), tag: z.string().min(1).max(160).optional(), columns: z.coerce.number().int().min(1).max(64).optional() }).strict().parse(request.query);
+    const query = z.object({ format: z.enum(['png', 'json', 'unity', 'sheet', 'sheet-json', 'gif']).default('png'), frameId: z.string().min(1).max(100).optional(), tag: z.string().min(1).max(160).optional(), columns: z.coerce.number().int().min(1).max(64).optional(), scale: z.coerce.number().int().min(1).max(16).optional() }).strict().parse(request.query);
     const { asset, revision } = store.getAsset(request.params.id); const { document } = revision;
     const name = asset.name.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 80) || 'asset';
     const sheet = () => renderSheet(document, { frameIds: framesFor(document, query.tag), columns: query.columns });
-    const extension = { png: 'png', json: 'pixelator.json', unity: 'unity.json', sheet: 'sheet.png', 'sheet-json': 'sheet.json' }[query.format];
+    const extension = { png: 'png', json: 'pixelator.json', unity: 'unity.json', sheet: 'sheet.png', 'sheet-json': 'sheet.json', gif: 'gif' }[query.format];
     reply.header('Content-Disposition', `attachment; filename="${name}.${extension}"`);
     if (query.format === 'png') return reply.type('image/png').send(renderPng(document, 1, query.frameId));
     if (query.format === 'sheet') return reply.type('image/png').send(sheet().png);
+    if (query.format === 'gif') return reply.type('image/gif').send(renderGif(document, { tag: query.tag, scale: query.scale }));
     if (query.format === 'sheet-json') return reply.type('application/json').send(sheetManifest(asset.name, `${name}.sheet.png`, document, sheet().layout));
     if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheet().layout }) : unityManifest(asset.id, revision.id, asset.name, document));
     return reply.type('application/json').send(store.exportAsset(asset.id));
@@ -129,7 +130,8 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   app.post('/api/import', request => {
     const input = schema.importPngInput.parse(request.body);
     const style = store.getProject(input.projectId).style;
-    const doc = importPng(input.pngBase64, style.maxColors, style.paletteLocked);
+    const image = importPng(input.pngBase64, style.maxColors, style.paletteLocked);
+    const doc = input.frameWidth && input.frameHeight ? sliceSheet(image, input.frameWidth, input.frameHeight, { frameCount: input.frameCount, durationMs: input.durationMs }) : image;
     if (input.type === 'character') doc.pivot = { x: doc.width / 2, y: doc.height };
     return store.importDocument({ projectId: input.projectId, name: input.name, type: input.type }, doc);
   });

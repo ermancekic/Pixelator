@@ -408,8 +408,10 @@ describe('documents stored before animation support', () => {
       store.db.prepare('UPDATE revisions SET data=? WHERE id=?').run(JSON.stringify({ ...revision, document: downgrade(revision.document) }), revision.id);
     }
     const stored = store.db.prepare("SELECT data FROM requests WHERE id LIKE '%:legacy-paint'").get() as { data: string };
-    const response = JSON.parse(stored.data) as { revision: Revision };
-    store.db.prepare("UPDATE requests SET data=? WHERE id LIKE '%:legacy-paint'").run(JSON.stringify({ ...response, revision: { ...response.revision, document: downgrade(response.revision.document) } }));
+    expect(JSON.parse(stored.data)).toEqual({ revisionId: painted.revision.id, diff: painted.diff });
+    // Requests saved before compact replay records held the whole response, including a version 1 document.
+    const legacyResponse: { asset: unknown; revision: Revision; diff: unknown } = { asset: painted.asset, revision: { ...painted.revision, document: downgrade(painted.revision.document) as unknown as PixelDocument }, diff: painted.diff };
+    store.db.prepare("UPDATE requests SET data=? WHERE id LIKE '%:legacy-paint'").run(JSON.stringify(legacyResponse));
     expect(JSON.parse((store.db.prepare('SELECT data FROM revisions WHERE id=?').get(painted.revision.id) as { data: string }).data).document.schemaVersion).toBe(1);
 
     expect(store.getAsset(detail.asset.id).revision).toEqual(painted.revision);
