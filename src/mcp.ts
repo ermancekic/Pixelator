@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import * as schema from './contracts.js';
 import { AppError, Store } from './store.js';
 import { renderPng, unityManifest } from './images.js';
-import { STYLE_PRESETS, validateDocument } from './engine.js';
-import type { AssetDetail, Revision } from './types.js';
+import { readIndices, STYLE_PRESETS, validateDocument } from './engine.js';
+import { encodeRows, MAX_READ_CELLS, ROW_ALPHABET, rowLegend } from './raster-text.js';
+import type { ApplyResult, AssetDetail, Revision, ValidationReport } from './types.js';
 
 export const WORKFLOW = readFileSync(new URL('../skills/pixel-artist/SKILL.md', import.meta.url), 'utf8');
 export const ARTIST_GUIDE = {
@@ -35,6 +36,14 @@ export function revisionSummary(revision: Revision, includePixels = false) {
   };
 }
 const detailSummary = (detail: AssetDetail, includePixels = false) => ({ asset: detail.asset, revision: revisionSummary(detail.revision, includePixels) });
+const compactValidation = ({ valid, colorCount, opaquePixels, boundingBox, isolatedPixels, issues }: ValidationReport) => ({ valid, colorCount, opaquePixels, boundingBox, isolatedPixels, issues });
+// Agents mostly need the new revision for the next expectedRevision; the full context stays available via response=full or get_asset.
+export const compactApplyResult = ({ asset, revision, diff }: ApplyResult) => ({
+  assetId: asset.id, revisionId: revision.id, parentId: revision.parentId, label: revision.label, diff,
+  validation: compactValidation(revision.validation),
+  layers: revision.document.layers.map(({ id, visible, locked }) => ({ id, visible, locked })),
+});
+const MAX_INSPECT_PIXELS = 4096 * 4096;
 const jsonResult = (value: unknown) => {
   const structuredContent = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : { result: value };
   return { content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent };
@@ -57,30 +66,39 @@ export function createMcpServer(store: Store, exportDir: string, baseUrl: string
       catch (error) { return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: publicError(error) }) }] }; }
     });
   }
-  tool('get_workflow', 'Read and apply the current source-backed Artist Guide, review checklist, workflow and precision rules before every art task.', z.object({}).strict(), () => ({ workflow: WORKFLOW, artistGuide: ARTIST_GUIDE, presets: STYLE_PRESETS, limits: { canvas: 'Positive integer dimensions; limited by available memory and runtime', opaqueColors: 32, layers: 32, operationsPerBatch: 512, batchesPerRun: 120, correctionRounds: 3, targetMinutes: 10 } }), true);
+  tool('get_workflow', 'Read and apply the current source-backed Artist Guide, review checklist, workflow and precision rules before every art task.', z.object({}).strict(), () => ({ workflow: WORKFLOW, artistGuide: ARTIST_GUIDE, presets: STYLE_PRESETS, limits: { canvas: 'Positive integer dimensions; limited by available memory and runtime', opaqueColors: 32, layers: 32, operationsPerBatch: 512, batchesPerRun: 120, correctionRounds: 3, targetMinutes: 10, readPixelsCells: MAX_READ_CELLS, inspectScales: 3 }, rowAlphabet: ROW_ALPHABET }), true);
   tool('list_projects', 'List local projects and their visual style profiles.', z.object({}).strict(), () => ({ projects: store.listProjects() }), true);
   tool('create_project', 'Create a local project with a consistent style profile.', schema.projectInput, input => store.createProject(input));
   tool('update_project', 'Update project defaults. Existing assets keep their saved style. A full style object is required when changing style.', schema.projectUpdate.extend({ projectId: identifier }), ({ projectId, ...input }) => store.updateProject(projectId, input));
   tool('find_assets', 'Find reusable assets by project, words, tags and asset type.', z.object({ projectId: identifier, q: z.string().max(300).optional(), type: schema.assetType.optional() }).strict(), input => ({ assets: store.listAssets(input.projectId, input.q, input.type) }), true);
   tool('create_asset', 'Create a blank editable canvas with named semantic layers, not a generated image. Plan and draw the asset next using apply_operations. Palette index 0 is transparent. For character consistency, put body and equipment on separate layers.', schema.createAssetInput.omit({ sourceAssetId: true }), input => detailSummary(store.createAsset(input)));
   tool('get_asset', 'Read current revision, palette indices, layers, style and validation. Set includePixels only when exact raster data is needed; ordinary inspection uses inspect_asset.', assetIdInput.extend({ includePixels: z.boolean().optional() }), input => detailSummary(store.getAsset(input.assetId), input.includePixels), true);
-  tool('apply_operations', 'Atomically draw exact integer pixel operations. Layer order is bottom-to-top. Use editScope.layerIds and optional rect to protect all other raster data. Global palette edits need allowPaletteChanges, every layer in scope, no rect, and an unlocked palette. Metadata edits need allowLayerChanges and full scope. duplicate_layer inserts an independent copy above layerId with new id/name, retaining visibility and lock. Fill defaults to contiguous=true and reference=layer; reference=composite samples visible layers but writes only the target, and contiguous=false fills all matching indices within scope. Never redraw the whole asset for a local request. Reuse requestId only for an identical retry. Shapes use palette indices; filled defaults true.', schema.applyRequest.extend({ assetId: identifier }), ({ assetId, ...request }) => {
+  tool('apply_operations', 'Atomically draw exact integer pixel operations. Layer order is bottom-to-top. Use editScope.layerIds and optional rect to protect all other raster data. Global palette edits need allowPaletteChanges, every layer in scope, no rect, and an unlocked palette. Metadata edits need allowLayerChanges and full scope. Prefer rows for raster blocks: one string per row, "." transparent, 1-9 and a-w for palette indices 1-32; mode=over keeps existing pixels under ".". duplicate_layer inserts an independent copy above layerId with new id/name, retaining visibility and lock. Fill defaults to contiguous=true and reference=layer; reference=composite samples visible layers but writes only the target, and contiguous=false fills all matching indices within scope. Never redraw the whole asset for a local request. Reuse requestId only for an identical retry. Shapes use palette indices; filled defaults true. The response is compact (new revisionId, diff, validation, layers); pass response=full for the complete asset and revision summary.', schema.applyRequest.extend({ assetId: identifier, response: z.enum(['compact', 'full']).optional() }), ({ assetId, response, ...request }) => {
     const result = store.apply(assetId, { ...request, actor: 'agent' });
-    return { ...detailSummary(result), diff: result.diff };
+    return response === 'full' ? { ...detailSummary(result), diff: result.diff } : compactApplyResult(result);
   });
-  const inspectInput = assetIdInput.extend({ revisionId: identifier.optional(), runId: identifier.optional(), scale: z.number().int().min(1).max(32).optional() });
+  tool('read_pixels', `Read exact palette indices of a region as compact rows, the same encoding the rows operation writes. Omit layerId for the visible composite. Use before precise local edits instead of get_asset includePixels. At most ${MAX_READ_CELLS} cells per call.`, assetIdInput.extend({ revisionId: identifier.optional(), layerId: identifier.optional(), rect: schema.rect.optional() }), input => {
+    const revision = store.getRevision(input.assetId, input.revisionId); const { document } = revision;
+    const area = input.rect ?? { x: 0, y: 0, width: document.width, height: document.height };
+    if (area.x + area.width > document.width || area.y + area.height > document.height) throw new AppError('INVALID_RECT', 'Der Bereich muss innerhalb der Leinwand liegen.');
+    if (area.width * area.height > MAX_READ_CELLS) throw new AppError('REGION_TOO_LARGE', `Höchstens ${MAX_READ_CELLS} Zellen pro Aufruf. Einen kleineren rect wählen.`);
+    return { assetId: input.assetId, revisionId: revision.id, source: input.layerId ?? 'composite', ...area, legend: rowLegend(document.palette), rows: encodeRows(readIndices(document, input.layerId), document.width, area) };
+  }, true);
+  const inspectInput = assetIdInput.extend({ revisionId: identifier.optional(), runId: identifier.optional(), scale: z.number().int().min(1).max(32).optional(), scales: z.array(z.number().int().min(1).max(32)).min(1).max(3).optional() });
   server.registerTool('inspect_asset', {
-    description: 'See the actual PNG rendering, saved asset style and revision metadata. Current colors come from document.palette, not the original style palette. Use scale 1 and an enlarged integer scale, then review against the Artist Guide checklist. This returns real image content. Pass runId to record delivery of the current revision before record_review. Transparency is real; grid/checkerboard are not asset pixels.',
+    description: 'See the actual PNG rendering, saved asset style and revision metadata. Current colors come from document.palette, not the original style palette. Pass scales, for example [1, 8], to receive native and enlarged images in one call, then review against the Artist Guide checklist. This returns real image content. Pass runId to record delivery of the current revision before record_review. Transparency is real; grid/checkerboard are not asset pixels.',
     inputSchema: inspectInput, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   }, async input => {
     try {
       const revision = store.getRevision(input.assetId, input.revisionId);
       const { asset } = store.getAsset(input.assetId);
-      const scale = input.scale ?? Math.max(1, Math.min(16, Math.floor(512 / Math.max(revision.document.width, revision.document.height))));
-      const png = renderPng(revision.document, scale);
+      const { width, height } = revision.document;
+      const scales = input.scales ?? [input.scale ?? Math.max(1, Math.min(16, Math.floor(512 / Math.max(width, height))))];
+      if (scales.some(scale => width * scale * height * scale > MAX_INSPECT_PIXELS)) throw new AppError('RENDER_SIZE', 'Das Prüfbild wäre zu groß. Einen kleineren Zoom wählen.');
+      const images = scales.map(scale => ({ scale, width: width * scale, height: height * scale, png: renderPng(revision.document, scale) }));
       if (input.runId) store.inspected(input.runId, input.assetId, revision.id);
-      const summary = { ...revisionSummary(revision), asset: { id: asset.id, name: asset.name, type: asset.type, style: asset.style }, artistGuide: { version: ARTIST_GUIDE.version, uri: ARTIST_GUIDE.uri }, scale, imageWidth: revision.document.width * scale, imageHeight: revision.document.height * scale };
-      return { content: [{ type: 'image' as const, data: png.toString('base64'), mimeType: 'image/png' }, { type: 'text' as const, text: JSON.stringify(summary) }], structuredContent: summary };
+      const summary = { ...revisionSummary(revision), asset: { id: asset.id, name: asset.name, type: asset.type, style: asset.style }, artistGuide: { version: ARTIST_GUIDE.version, uri: ARTIST_GUIDE.uri }, scale: images[0].scale, imageWidth: images[0].width, imageHeight: images[0].height, images: images.map(({ scale, width, height }) => ({ scale, width, height })) };
+      return { content: [...images.map(image => ({ type: 'image' as const, data: image.png.toString('base64'), mimeType: 'image/png' })), { type: 'text' as const, text: JSON.stringify(summary) }], structuredContent: summary };
     } catch (error) { return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: publicError(error) }) }] }; }
   });
   tool('validate_asset', 'Check dimensions, palette, alpha, bounding box and raster integrity. Isolated pixels and empty canvases are diagnostics, not automatic art-quality judgments. Light, readability and character identity require visual review.', assetIdInput.extend({ revisionId: identifier.optional() }), input => validateDocument(store.getRevision(input.assetId, input.revisionId).document), true);

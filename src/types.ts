@@ -71,6 +71,7 @@ type DrawingBase = { layerId: string };
 export type Operation =
   | (DrawingBase & { op: 'pixels'; points: [number, number, number][] })
   | (DrawingBase & { op: 'patch'; x: number; y: number; width: number; height: number; pixels: number[] })
+  | (DrawingBase & { op: 'rows'; x: number; y: number; rows: string[]; mode?: 'replace' | 'over' })
   | (DrawingBase & { op: 'line'; x1: number; y1: number; x2: number; y2: number; color: number })
   | (DrawingBase & { op: 'rect' | 'ellipse'; x: number; y: number; width: number; height: number; color: number; filled?: boolean })
   | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number })
