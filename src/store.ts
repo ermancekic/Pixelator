@@ -229,6 +229,8 @@ export class Store extends EventEmitter {
     this.insertRevision(revision);
     asset.headRevisionId = revision.id;
     asset.updatedAt = revision.createdAt;
+    // The asset style records the current canvas size, which resize_canvas and restores can change.
+    asset.style = { ...asset.style, width: revision.document.width, height: revision.document.height };
     this.putAsset(asset);
   }
   apply(assetId: string, input: unknown): ApplyResult {

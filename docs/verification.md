@@ -2,6 +2,14 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
+## Ergänzung: Editor-Grundfunktionen
+
+Am 17. Oktober 2026 bestanden **197 Tests in 13 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neue Tests decken Auswahlmasken im Engine-Scope, Kontur-, Polygon- und Palettenoptionen, `merge_layers`, `resize_canvas` (einschließlich Assetgröße, Wiederherstellen und MCP), skalierte PNG-/Sheet-Exporte, Palettendateien sowie die Editor-Helfer für Auswahl, Zwischenablage, Pinsel, Muster und Schattieren ab.
+
+**Browser** (Chromium über Playwright, separater Dienst mit eigenem Datenordner): Pinsel 3 px malt 3×3, runder Radierer löscht ein Plus; gefülltes Rechteck mit Schachbrettmuster; Polygon per Enter; Zauberstab plus `Entf`; Lasso begrenzt den Fülleimer; Freiform verschieben; `Strg+A`, `Strg+C`, `Strg+Umschalt+V` als pixelgleiche neue Ebene; Zusammenführen; Schattieren; Zweitfarbe per Rechtsklick und `X`; Kontur; Farbe ersetzen; Leinwand auf 20×16 und „Auf Inhalt zuschneiden“; PNG-Export 4×; GPL-Export; HEX-Import mit „Pixel zuordnen“; Referenzbild; ein fremdes PNG aus der System-Zwischenablage (zwei neue Farben angehängt, mittig platziert, bei voller Palette angenähert). Keine Seiten- oder Konsolenfehler.
+
+**Nicht geprüft:** Zwischenablage in Firefox und Safari, Import des skalierten Sheet-JSON in einer Engine und ein realer Agentenauftrag mit den neuen Operationen.
+
 ## Ergänzung: KI-Effizienz und Animation
 
 Umgesetzt nach dem [Implementierungsplan](animation-plan.md). Am 17. Oktober 2026 bestanden **164 Tests in 10 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu geprüft sind unter anderem: `rows`/`read_pixels` verlustfrei, Frames mit Scope-Nachweis, Pixelorama-Tag-Regeln, alte Dokumente/Replays/Bundles als ein Frame, Sheet-Inspektion mit Onion und Frame-Abdeckung für `completed`, Sheet-/Aseprite-/Unity-/GIF-Export sowie Sheet-Re-Import.

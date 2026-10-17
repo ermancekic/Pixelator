@@ -80,6 +80,8 @@ export interface AssetDetail { asset: Asset; revision: Revision }
 export interface EditScope {
   layerIds: string[];
   rect?: Rect;
+  /** Writable pixels inside rect, one string per row: "#" writable, "." protected. */
+  mask?: string[];
   /** Writable frames; omitted means every frame. */
   frameIds?: string[];
   allowPaletteChanges?: boolean;
@@ -93,13 +95,13 @@ export type Operation =
   | (DrawingBase & { op: 'rows'; x: number; y: number; rows: string[]; mode?: 'replace' | 'over' })
   | (DrawingBase & { op: 'line'; x1: number; y1: number; x2: number; y2: number; color: number })
   | (DrawingBase & { op: 'rect' | 'ellipse'; x: number; y: number; width: number; height: number; color: number; filled?: boolean })
-  | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number })
+  | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number; filled?: boolean })
   | (DrawingBase & { op: 'fill'; x: number; y: number; color: number; reference?: 'layer' | 'composite'; contiguous?: boolean })
   | (DrawingBase & { op: 'move' | 'copy'; dx: number; dy: number; rect?: Rect })
   | (DrawingBase & { op: 'flip'; axis: 'x' | 'y'; rect?: Rect })
   | (DrawingBase & { op: 'rotate'; turns: 1 | 2 | 3; rect?: Rect })
   | (DrawingBase & { op: 'replace'; from: number; to: number; rect?: Rect })
-  | (DrawingBase & { op: 'outline'; color: number })
+  | (DrawingBase & { op: 'outline'; color: number; rect?: Rect; reference?: 'layer' | 'composite'; corners?: boolean })
   | (DrawingBase & { op: 'stamp'; sourceLayerId?: string; sourceFrameId?: string; rect?: Rect; dx?: number; dy?: number; mode?: 'over' | 'replace' })
   | { op: 'add_frame'; id: string; index?: number; durationMs?: number }
   | { op: 'duplicate_frame'; frameId: string; id: string; index?: number }
@@ -112,7 +114,9 @@ export type Operation =
   | { op: 'remove_layer'; layerId: string }
   | { op: 'update_layer'; layerId: string; name?: string; visible?: boolean; locked?: boolean }
   | { op: 'reorder_layers'; layerIds: string[] }
-  | { op: 'palette'; colors: string[] }
+  | { op: 'merge_layers'; layerIds: string[] }
+  | { op: 'resize_canvas'; width: number; height: number; offsetX?: number; offsetY?: number }
+  | { op: 'palette'; colors: string[]; remap?: 'index' | 'nearest' }
   | { op: 'pivot'; x: number; y: number };
 export interface ApplyRequest {
   expectedRevision: string;

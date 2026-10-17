@@ -601,7 +601,7 @@ describe('MCP transport', () => {
     const compact = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail) } });
     const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
     expect(compact.structuredContent).toEqual({
-      assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixel bearbeitet',
+      assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixel bearbeitet', width: 8, height: 8,
       diff: { changedPixels: 2, changedLayers: ['body'], changedFrames: ['frame-1'], boundingBox: { x: 1, y: 1, width: 2, height: 1 } },
       validation: { valid: true, colorCount: 2, opaquePixels: 2, boundingBox: { x: 1, y: 1, width: 2, height: 1 }, isolatedPixels: 0, issues: [] },
       layers: [{ id: 'body', visible: true, locked: false }, { id: 'sword', visible: true, locked: false }],
@@ -763,5 +763,45 @@ describe('loopback request guards', () => {
     expect((await app.inject('/api/mcp/status')).json()).toMatchObject({ running: true, requests: 0 });
     const projects = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(projects.json()).toEqual([]);
+  });
+});
+
+describe('editor exports and canvas size', () => {
+  it('exports enlarged PNGs and sheets with matching Aseprite rectangles plus palette files', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 1, frames: [{ id: 'a' }, { id: 'b' }] } })).json<AssetDetail>();
+    await app.inject({ method: 'POST', url: `/api/assets/${created.asset.id}/operations`, payload: { expectedRevision: created.revision.id, requestId: 'coin', editScope: { layerIds: ['body'] }, operations: [{ op: 'rows', layerId: 'body', frameId: 'a', x: 0, y: 0, rows: ['1.'] }] } });
+    const png = PNG.sync.read((await app.inject(`/api/assets/${created.asset.id}/export?format=png&scale=4`)).rawPayload);
+    expect([png.width, png.height]).toEqual([8, 4]);
+    expect([...png.data.subarray((3 * 8 + 3) * 4, (3 * 8 + 3) * 4 + 4)]).toEqual([15, 56, 15, 255]);
+    expect([...png.data.subarray((3 * 8 + 4) * 4, (3 * 8 + 4) * 4 + 4)]).toEqual([0, 0, 0, 0]);
+    const sheet = PNG.sync.read((await app.inject(`/api/assets/${created.asset.id}/export?format=sheet&scale=3`)).rawPayload);
+    expect([sheet.width, sheet.height]).toEqual([12, 3]);
+    const manifest = (await app.inject(`/api/assets/${created.asset.id}/export?format=sheet-json&scale=3`)).json();
+    expect(manifest).toMatchObject({ frames: [{ frame: { x: 0, y: 0, w: 6, h: 3 } }, { frame: { x: 6, y: 0, w: 6, h: 3 } }], meta: { size: { w: 12, h: 3 }, scale: '3', pivot: { x: 3, y: 1.5 } } });
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=png&scale=17`)).statusCode).toBe(400);
+    const gpl = await app.inject(`/api/assets/${created.asset.id}/export?format=gpl`);
+    expect(gpl.headers['content-disposition']).toContain('Coin.gpl');
+    expect(gpl.body.split('\n').slice(0, 5)).toEqual(['GIMP Palette', 'Name: Coin', 'Columns: 8', '#', ' 15  56  15\t#0F380F']);
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=hex`)).body).toBe('0F380F\n306230\n8BAC0F\n9BBC0F\n');
+    expect((await app.inject(`/api/assets/${created.asset.id}/export?format=pal`)).body.split('\r\n').slice(0, 4)).toEqual(['JASC-PAL', '0100', '4', '15 56 15']);
+    const mcpPng = await rpc<ToolResult>(app, 'tools/call', { name: 'export_asset', arguments: { assetId: created.asset.id, format: 'png', scale: 2 } });
+    expect((mcpPng.structuredContent as { downloadUrl: string }).downloadUrl).toContain('scale=2');
+  });
+
+  it('resizes the canvas through REST and keeps the asset size and history in sync', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const scope = { layerIds: ['body', 'sword'], allowLayerChanges: true };
+    const resized = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: { expectedRevision: detail.revision.id, requestId: 'grow', editScope: scope, operations: [{ op: 'resize_canvas', width: 12, height: 10, offsetX: 2, offsetY: 2 }] } });
+    expect(resized.statusCode, resized.body).toBe(200);
+    const result = resized.json<ApplyResult>();
+    expect(result.asset.style).toMatchObject({ width: 12, height: 10 });
+    expect(result.revision.document.pivot).toEqual({ x: 6, y: 10 });
+    const listed = (await app.inject(`/api/assets?projectId=${detail.asset.projectId}`)).json<Asset[]>();
+    expect(listed[0].style).toMatchObject({ width: 12, height: 10 });
+    const restored = (await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/restore`, payload: { revisionId: detail.revision.id, expectedRevision: result.revision.id, requestId: 'back' } })).json<AssetDetail>();
+    expect(restored.asset.style).toMatchObject({ width: 8, height: 8 });
+    const compact = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: detail.asset.id, expectedRevision: restored.revision.id, requestId: 'crop', editScope: scope, operations: [{ op: 'resize_canvas', width: 4, height: 4, offsetX: -2, offsetY: -2 }] } });
+    expect(compact.structuredContent).toMatchObject({ width: 4, height: 4 });
   });
 });

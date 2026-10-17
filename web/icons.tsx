@@ -35,6 +35,15 @@ const paths: Record<string, ReactNode> = {
   tag: <><path d="M3 12V4h8l10 10-8 8Z"/><circle cx="7.5" cy="8.5" r="1.5"/></>,
   'chevron-left': <path d="m15 5-7 7 7 7"/>, 'chevron-right': <path d="m9 5 7 7-7 7"/>,
   film: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m10 0h4M3 15h4m10 0h4"/></>,
+  shade: <><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor"/></>,
+  polygon: <path d="m12 3 9 7-4 11H7L3 10Z"/>,
+  lasso: <><ellipse cx="13" cy="9" rx="8" ry="5.5" strokeDasharray="3 2.5"/><path d="M7 13c-2 1.5-2 4.5.5 5 2 .4 2.5 1.5 2 3"/></>,
+  wand: <><path d="m3 21 11-11"/><path d="m15 3 1.2 2.8L19 7l-2.8 1.2L15 11l-1.2-2.8L11 7l2.8-1.2Z"/><path d="M20 13v3m-1.5-1.5h3"/></>,
+  merge: <><path d="m12 2 9 5-9 5-9-5Z"/><path d="M12 15v7m-3-3 3 3 3-3"/></>,
+  flatten: <><path d="m12 3 9 5-9 5-9-5Z"/><path d="M3 17h18M3 21h18"/></>,
+  crop: <><path d="M6 2v16h16"/><path d="M2 6h16v16"/></>,
+  image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></>,
+  paste: <><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M9 11h6M9 15h4"/></>,
 };
 export function Icon({ name, size = 18 }: { name: string; size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] ?? paths.rect}</svg>; }
 export function IconButton({ icon, label, active, children, className = '', ...props }: { icon: string; label: string; active?: boolean; children?: ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) { return <button className={`icon-button${active ? ' active' : ''} ${className}`} aria-label={label} aria-pressed={active} title={label} {...props}><Icon name={icon}/>{children}</button>; }

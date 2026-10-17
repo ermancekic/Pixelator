@@ -145,19 +145,19 @@ function exportedTags(document: PixelDocument, frameIds: string[]): AnimationTag
   });
 }
 
-/** Sheet metadata in Aseprite's JSON array format, which common engine importers read. */
-export function sheetManifest(name: string, image: string, document: PixelDocument, layout: SheetLayout) {
+/** Sheet metadata in Aseprite's JSON array format, which common engine importers read; rectangles address the image rendered at scale. */
+export function sheetManifest(name: string, image: string, document: PixelDocument, layout: SheetLayout, scale = 1) {
   const frameIds = layout.cells.map(cell => cell.frameId);
   return {
     frames: layout.cells.map(cell => ({
-      filename: `${name} ${cell.frameId}`, frame: { x: cell.x, y: cell.y, w: cell.width, h: cell.height }, rotated: false, trimmed: false,
-      spriteSourceSize: { x: 0, y: 0, w: cell.width, h: cell.height }, sourceSize: { w: cell.width, h: cell.height }, duration: cell.durationMs,
+      filename: `${name} ${cell.frameId}`, frame: { x: cell.x * scale, y: cell.y * scale, w: cell.width * scale, h: cell.height * scale }, rotated: false, trimmed: false,
+      spriteSourceSize: { x: 0, y: 0, w: cell.width * scale, h: cell.height * scale }, sourceSize: { w: cell.width * scale, h: cell.height * scale }, duration: cell.durationMs,
     })),
     meta: {
-      app: 'https://github.com/ermancekic/Pixelator', version: '0.1.0', image, format: 'RGBA8888', size: { w: layout.width, h: layout.height }, scale: '1',
+      app: 'https://github.com/ermancekic/Pixelator', version: '0.1.0', image, format: 'RGBA8888', size: { w: layout.width * scale, h: layout.height * scale }, scale: String(scale),
       frameTags: exportedTags(document, frameIds).map(({ name, from, to, direction }) => ({ name, from, to, direction })),
       layers: document.layers.map(layer => ({ name: layer.name, opacity: 255, blendMode: 'normal' })),
-      slices: [], pivot: document.pivot,
+      slices: [], pivot: { x: document.pivot.x * scale, y: document.pivot.y * scale },
     },
   };
 }
