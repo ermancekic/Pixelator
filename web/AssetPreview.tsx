@@ -1,3 +1,4 @@
+import { ResizablePanel } from './ResizablePanel';
 import { memo, useEffect, useRef, useState } from 'react';
 import { composite, getFrame, readIndices } from '../src/engine';
 import type { PixelDocument } from '../src/types';
@@ -78,7 +79,7 @@ export const AssetPreview = memo(function AssetPreview({ doc, frameId, playing =
   useEffect(() => () => {
     if (cachedDocument === doc) { cachedDocument = undefined; rendered = new Map(); }
   }, [doc]);
-  return <section className="inspector-section preview-section">
+  return <ResizablePanel id="preview" label="Vorschau" className="inspector-section preview-section" edge="bottom" minSize={200}>
     <div className="section-heading"><span>VORSCHAU</span><span className="muted">{doc && doc.frames.length > 1 && `${playing ? '▶ ' : ''}FRAME ${Math.max(0, doc.frames.findIndex(frame => frame.id === frameId)) + 1}/${doc.frames.length} · `}{scale * 100} %</span></div>
     <div className="preview-options">
       <label>Zoom<select aria-label="Vorschau-Zoom" value={scale} onChange={event => setScale(Number(event.target.value))}>{[1, 2, 4, 8].map(value => <option key={value} value={value}>{value}×</option>)}</select></label>
@@ -90,5 +91,5 @@ export const AssetPreview = memo(function AssetPreview({ doc, frameId, playing =
         {Array.from({ length: tiled ? 9 : 1 }, (_, index) => <div key={index} className="preview-cell" style={{ width: doc.width * scale, height: doc.height * scale }}><Miniature doc={doc} frameId={frameId}/></div>)}
       </div> : <span className="muted">Kein Asset ausgewählt</span>}
     </div>
-  </section>;
+  </ResizablePanel>;
 });
