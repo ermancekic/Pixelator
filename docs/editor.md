@@ -1,6 +1,6 @@
 # Editor
 
-Kurzreferenz der Bearbeitungsfunktionen. Alle Kürzel zeigt der Editor unter `?`.
+Kurzreferenz der Bearbeitungsfunktionen. Alle Kürzel zeigt der Editor unter `?`. Tilesets, Autotiles und nahtloses Zeichnen beschreibt [Tiles](tiles.md).
 
 ## Zeichnen
 

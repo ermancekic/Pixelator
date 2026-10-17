@@ -1,6 +1,6 @@
 export type Point = { x: number; y: number };
 export type CanvasView = { zoom: number; pan: Point };
-export type Tool = 'pencil' | 'eraser' | 'shade' | 'fill' | 'eyedropper' | 'line' | 'rect' | 'ellipse' | 'polygon' | 'selection' | 'lasso' | 'wand' | 'move' | 'pan';
+export type Tool = 'pencil' | 'eraser' | 'shade' | 'fill' | 'eyedropper' | 'line' | 'rect' | 'ellipse' | 'polygon' | 'selection' | 'lasso' | 'wand' | 'tile' | 'move' | 'pan';
 export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 24;
 
@@ -45,7 +45,7 @@ export function createPanPreview(artboard: HTMLElement, initialPan: Point) {
 type ShortcutEvent = { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; isComposing?: boolean };
 type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start' | 'previous-frame' | 'next-frame' | 'play' | 'onion'
   | 'select-all' | 'deselect' | 'copy' | 'copy-merged' | 'cut' | 'paste' | 'paste-layer' | 'swap-colors' | 'brush-smaller' | 'brush-larger' | 'commit';
-const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', s: 'shade', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', u: 'polygon', v: 'selection', q: 'lasso', w: 'wand', m: 'move', h: 'pan' };
+const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', s: 'shade', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', u: 'polygon', v: 'selection', q: 'lasso', w: 'wand', t: 'tile', m: 'move', h: 'pan' };
 export function resolveShortcut(event: ShortcutEvent, blocked = false): Shortcut | null {
   if (blocked || event.isComposing || event.altKey) return null;
   const key = event.key.toLowerCase();

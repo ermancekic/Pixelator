@@ -1,7 +1,9 @@
 import { rowIndex } from './raster-text.js';
+import { activeSlots, autotileLayout, CENTER, composeTile, MAX_TERRAINS, MAX_TILE_TEXT, missingCombinations, TEMPLATE_COLUMNS, TEMPLATE_MODE, templateRows, TERRAIN_COLORS, TERRAIN_SLOTS, tileGrid, wangOf } from './tiles.js';
+import type { KeyTile } from './tiles.js';
 import type {
   AnimationTag, AnimationTagInput, EditScope, FrameReport, FrameView, Issue, LegacyPixelDocument, Operation, PixelDiff,
-  PixelDocument, PixelFrame, PixelLayer, PixelStyle, ProjectStyle, Rect, ValidationReport,
+  PixelDocument, PixelFrame, PixelLayer, PixelStyle, ProjectStyle, Rect, TerrainMode, TileInfo, Tileset, ValidationReport,
 } from './types.js';
 
 export const DEFAULT_PALETTE = [
@@ -80,6 +82,36 @@ export function nearestColor(hex: string, palette: string[]): number {
     if (d < distance) { distance = d; best = i; }
   }
   return best;
+}
+
+const TERRAIN_MODES = ['corner', 'edge', 'mixed'];
+const tileText = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && value.length <= MAX_TILE_TEXT;
+function tilesetIssues(tileset: unknown, width: number, height: number): Issue[] {
+  const issue = (message: string): Issue[] => [{ code: 'INVALID_TILESET', severity: 'error', message }];
+  if (!object(tileset)) return issue('tileset must be an object.');
+  const { tileWidth, tileHeight, terrainMode, terrains, tiles } = tileset;
+  if (!integer(tileWidth) || tileWidth < 1 || !integer(tileHeight) || tileHeight < 1) return issue('Tile width and height must be positive integers.');
+  if (width % tileWidth || height % tileHeight) return issue(`Canvas ${width}×${height} must be a multiple of the tile size ${tileWidth}×${tileHeight}.`);
+  if (!TERRAIN_MODES.includes(terrainMode as string)) return issue('terrainMode must be corner, edge or mixed.');
+  if (!Array.isArray(terrains) || terrains.length > MAX_TERRAINS || !terrains.every(terrain => object(terrain) && name(terrain.name) && typeof terrain.color === 'string' && /^#[0-9a-f]{6}$/i.test(terrain.color))) return issue(`Terrains need a name and #RRGGBB color; at most ${MAX_TERRAINS}.`);
+  if (!Array.isArray(tiles)) return issue('tiles must be a list.');
+  const count = (width / tileWidth) * (height / tileHeight); const seen = new Set<number>(); const slots = activeSlots(terrainMode as TerrainMode);
+  for (const tile of tiles) {
+    if (!object(tile) || !integer(tile.id) || tile.id < 0 || tile.id >= count || seen.has(tile.id)) return issue(`Tile IDs must be unique and below ${count}.`);
+    seen.add(tile.id);
+    if ((tile.name !== undefined && !tileText(tile.name)) || (tile.type !== undefined && !tileText(tile.type))) return issue(`Tile ${tile.id}: name and type need 1..${MAX_TILE_TEXT} characters.`);
+    if (tile.probability !== undefined && (typeof tile.probability !== 'number' || !Number.isFinite(tile.probability) || tile.probability < 0 || tile.probability > 1000)) return issue(`Tile ${tile.id}: probability must be in 0..1000.`);
+    if (tile.collision !== undefined && (!Array.isArray(tile.collision) || tile.collision.length > 8 || !tile.collision.every(area => object(area) && integer(area.x) && integer(area.y) && integer(area.width) && integer(area.height) && area.x >= 0 && area.y >= 0 && area.width >= 1 && area.height >= 1 && area.x + area.width <= tileWidth && area.y + area.height <= tileHeight))) return issue(`Tile ${tile.id}: collision needs up to 8 rectangles inside the tile.`);
+    if (tile.terrain !== undefined && (!Array.isArray(tile.terrain) || tile.terrain.length !== TERRAIN_SLOTS || !tile.terrain.every((value, slot) => integer(value) && value >= 0 && value <= terrains.length && (!value || slot === CENTER || slots.includes(slot))))) return issue(`Tile ${tile.id}: terrain needs ${TERRAIN_SLOTS} values in 0..${terrains.length}, set only on positions the ${terrainMode} mode reads.`);
+  }
+  return [];
+}
+/** Clears terrain values the mode ignores or whose terrain no longer exists; drops labels that end up empty. */
+function cleanTile(tile: TileInfo, mode: TerrainMode, terrains: number): TileInfo {
+  if (!tile.terrain) return tile;
+  const slots = activeSlots(mode); const terrain = tile.terrain.map((value, slot) => value <= terrains && (slot === CENTER || slots.includes(slot)) ? value : 0);
+  const { terrain: _old, ...rest } = tile;
+  return terrain.some(Boolean) ? { ...rest, terrain } : rest;
 }
 
 const normalizeTag = (tag: AnimationTagInput): AnimationTag => ({ name: tag.name, from: tag.from, to: tag.to, direction: tag.direction ?? 'forward', loop: tag.loop ?? true });
@@ -172,6 +204,7 @@ function validateStructure(doc: PixelDocument): ValidationReport {
     }
   }
   issues.push(...tagIssues(doc.tags, doc.frames.length));
+  if (doc.tileset !== undefined) issues.push(...tilesetIssues(doc.tileset, doc.width, doc.height));
   if (Array.isArray(doc.tags) && doc.tags.some(tag => object(tag) && (!TAG_DIRECTIONS.includes(tag.direction) || typeof tag.loop !== 'boolean'))) error('INVALID_TAGS', 'Stored tags need a direction and loop flag.');
   report.valid = !issues.some(issue => issue.severity === 'error');
   return report;
@@ -207,7 +240,14 @@ export function validateDocument(doc: PixelDocument): ValidationReport {
   else for (const frame of frames) {
     if (!frame.opaquePixels) report.issues.push({ code: 'EMPTY_FRAME', severity: 'warning', message: `Frame ${frame.frameId} has no visible pixels.`, frameId: frame.frameId });
   }
-  if (report.isolatedPixels) report.issues.push({ code: 'ISOLATED_PIXELS', severity: 'warning', message: `${report.isolatedPixels} visible pixels have no opaque neighbor.` });
+  if (report.isolatedPixels && !doc.tileset) report.issues.push({ code: 'ISOLATED_PIXELS', severity: 'warning', message: `${report.isolatedPixels} visible pixels have no opaque neighbor.` });
+  if (doc.tileset) {
+    const used = new Set(doc.tileset.tiles.flatMap(tile => tile.terrain ?? []).filter(Boolean));
+    for (const terrain of [...used].sort((a, b) => a - b)) {
+      const missing = missingCombinations(doc.tileset, terrain).length;
+      if (missing) report.issues.push({ code: 'TERRAIN_INCOMPLETE', severity: 'warning', message: `Terrain ${doc.tileset.terrains[terrain - 1].name}: ${missing} ${doc.tileset.terrainMode} combinations against empty cells have no labeled tile.` });
+    }
+  }
   return report;
 }
 
@@ -232,7 +272,7 @@ export function upgradeDocument(doc: PixelDocument | LegacyPixelDocument): Pixel
 export function createDocument(input: {
   width: number; height: number; palette?: string[]; maxColors?: number; paletteLocked?: boolean;
   layers?: { id: string; name: string }[]; pivot?: { x: number; y: number };
-  frames?: { id: string; durationMs?: number }[]; tags?: AnimationTagInput[];
+  frames?: { id: string; durationMs?: number }[]; tags?: AnimationTagInput[]; tileSize?: { width: number; height: number };
 }): PixelDocument {
   requireValue(object(input), 'INVALID_DOCUMENT', 'Document options must be an object.');
   requireValue(integer(input.width) && input.width >= 1 && integer(input.height) && input.height >= 1 && integer(input.width * input.height), 'INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
@@ -254,6 +294,7 @@ export function createDocument(input: {
     frames: frameOptions.map(frame => ({ id: frame.id, durationMs: frame.durationMs ?? DEFAULT_FRAME_MS, cels: Object.fromEntries(layerOptions.map(layer => [layer.id, new Array(cells).fill(0)])) })),
     tags: tags.map(normalizeTag),
     pivot: input.pivot ? { ...input.pivot } : { x: input.width / 2, y: input.height / 2 },
+    ...(input.tileSize ? { tileset: { tileWidth: input.tileSize.width, tileHeight: input.tileSize.height, terrainMode: 'mixed' as const, terrains: [], tiles: [] } } : {}),
   };
   assertDocument(doc);
   return doc;
@@ -314,6 +355,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     layers: original.layers.map(layer => ({ ...layer })),
     frames: original.frames.map(frame => ({ ...frame, cels: Object.fromEntries(Object.entries(frame.cels).map(([id, pixels]) => [id, pixels.slice()])) })),
     tags: original.tags.map(tag => ({ ...tag })),
+    ...(original.tileset ? { tileset: structuredClone(original.tileset) } : {}),
   };
   // resize_canvas replaces both for the rest of the batch.
   let cells = doc.width * doc.height;
@@ -373,6 +415,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     doc.tags = insertFrameIntoTags(doc.tags, index);
     allowedFrames?.add(frame.id);
   };
+  const requireTileset = (): Tileset => { requireValue(doc.tileset, 'NO_TILESET', 'This asset has no tile grid; set one with the tileset operation.'); return doc.tileset; };
   const color = (value: unknown): number => {
     requireValue(integer(value) && value >= 0 && value < doc.palette.length, 'INVALID_COLOR', 'Color must be an existing palette index.');
     return value;
@@ -582,6 +625,80 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         }
         break;
       }
+      case 'shift': {
+        // Offsets with wrap-around, like an image offset filter, to bring tile edges into the middle.
+        const target = raster(operation.layerId, operation.frameId); const area = operation.rect === undefined ? canvas : rect(operation.rect);
+        const dx = coordinate(operation.dx); const dy = coordinate(operation.dy); const source = target.pixels.slice();
+        const wrap = (value: number, size: number) => ((value % size) + size) % size;
+        for (let y = 0; y < area.height; y++) for (let x = 0; x < area.width; x++) write(target, area.x + wrap(x + dx, area.width), area.y + wrap(y + dy, area.height), source[(area.y + y) * doc.width + area.x + x]);
+        break;
+      }
+      case 'autotile': {
+        requireLayerChanges(); const target = raster(operation.layerId, operation.frameId); const tileset = requireTileset();
+        const template = operation.template;
+        requireValue(template === 'blob' || template === 'edge' || template === 'corner', 'INVALID_OPERATION', 'Autotile template must be blob, edge or corner.');
+        const { tileWidth: tw, tileHeight: th } = tileset;
+        requireValue(!(tw % 2) && !(th % 2), 'TILE_SIZE', 'Autotiles are built from quarter tiles and need an even tile width and height.');
+        const grid = tileGrid(tileset, doc.width, doc.height); const ox = coordinate(operation.x ?? 0); const oy = coordinate(operation.y ?? 0); const rows = templateRows(template);
+        requireValue(ox >= 0 && oy >= 0 && ox + TEMPLATE_COLUMNS <= grid.columns && oy + rows <= grid.rows, 'TEMPLATE_DOES_NOT_FIT', `The ${template} template needs ${TEMPLATE_COLUMNS}×${rows} tiles starting at tile column ${ox}, row ${oy}; the grid has ${grid.columns}×${grid.rows}.`);
+        const terrain = operation.terrain ?? 1;
+        requireValue(integer(terrain) && terrain >= 1 && terrain <= MAX_TERRAINS, 'INVALID_TERRAIN', `terrain must be in 1..${MAX_TERRAINS}.`);
+        const layout = autotileLayout(template);
+        const read = (column: number, row: number) => {
+          const pixels: number[] = [];
+          for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) pixels.push(target.pixels[((oy + row) * th + y) * doc.width + (ox + column) * tw + x]);
+          return pixels;
+        };
+        const keys = Object.fromEntries(layout.filter(cell => cell.key).map(cell => [cell.key, read(cell.column, cell.row)])) as Record<KeyTile, number[]>;
+        keys.fill ??= keys.cross;
+        for (const cell of layout) {
+          if (cell.key) continue;
+          const pixels = composeTile(keys, template, cell.mask!, tw, th);
+          for (let i = 0; i < pixels.length; i++) write(target, (ox + cell.column) * tw + i % tw, (oy + cell.row) * th + Math.floor(i / tw), pixels[i]);
+        }
+        while (tileset.terrains.length < terrain) tileset.terrains.push({ name: `Terrain ${tileset.terrains.length + 1}`, color: TERRAIN_COLORS[tileset.terrains.length] });
+        if (tileset.terrainMode !== TEMPLATE_MODE[template]) { tileset.terrainMode = TEMPLATE_MODE[template]; tileset.tiles = tileset.tiles.map(tile => cleanTile(tile, tileset.terrainMode, tileset.terrains.length)); }
+        for (const cell of layout) {
+          const id = (oy + cell.row) * grid.columns + ox + cell.column; const existing = tileset.tiles.find(tile => tile.id === id);
+          const { terrain: _old, ...rest } = existing ?? { id };
+          const next: TileInfo = cell.mask === null ? rest : { ...rest, terrain: wangOf(cell.mask, terrain) };
+          tileset.tiles = [...tileset.tiles.filter(tile => tile.id !== id), ...(Object.keys(next).length > 1 ? [next] : [])];
+        }
+        tileset.tiles.sort((a, b) => a.id - b.id);
+        break;
+      }
+      case 'tileset': {
+        requireLayerChanges(); const current = doc.tileset;
+        const tileWidth = operation.tileWidth ?? current?.tileWidth; const tileHeight = operation.tileHeight ?? current?.tileHeight;
+        requireValue(integer(tileWidth) && tileWidth >= 1 && integer(tileHeight) && tileHeight >= 1, 'INVALID_TILESET', 'A new tile grid needs tileWidth and tileHeight.');
+        requireValue(!(doc.width % tileWidth) && !(doc.height % tileHeight), 'TILE_GRID', `Canvas ${doc.width}×${doc.height} must be a multiple of the tile size ${tileWidth}×${tileHeight}.`);
+        const terrainMode = operation.terrainMode ?? current?.terrainMode ?? 'mixed'; const terrains = operation.terrains ?? current?.terrains ?? [];
+        requireValue(TERRAIN_MODES.includes(terrainMode), 'INVALID_TILESET', 'terrainMode must be corner, edge or mixed.');
+        requireValue(Array.isArray(terrains) && terrains.length <= MAX_TERRAINS && terrains.every(terrain => object(terrain) && name(terrain.name) && typeof terrain.color === 'string' && /^#[0-9a-f]{6}$/i.test(terrain.color)), 'INVALID_TILESET', `Terrains need a name and #RRGGBB color; at most ${MAX_TERRAINS}.`);
+        // Tile IDs depend on the grid, so a new tile size starts without per-tile metadata.
+        const sameGrid = current && current.tileWidth === tileWidth && current.tileHeight === tileHeight;
+        doc.tileset = { tileWidth, tileHeight, terrainMode, terrains: terrains.map(terrain => ({ name: terrain.name, color: terrain.color.toUpperCase() })), tiles: sameGrid ? current.tiles.map(tile => cleanTile(tile, terrainMode, terrains.length)) : [] };
+        break;
+      }
+      case 'remove_tileset': {
+        requireLayerChanges(); requireTileset(); delete doc.tileset;
+        break;
+      }
+      case 'tile_properties': {
+        requireLayerChanges(); const tileset = requireTileset(); const { count } = tileGrid(tileset, doc.width, doc.height);
+        requireValue(Array.isArray(operation.tiles) && operation.tiles.length > 0, 'INVALID_TILE', 'tile_properties needs at least one tile.');
+        for (const input of operation.tiles) {
+          requireValue(object(input) && integer(input.id) && input.id >= 0 && input.id < count, 'INVALID_TILE', `Tile IDs must be in 0..${count - 1}.`);
+          const next: Record<string, unknown> = { ...(tileset.tiles.find(tile => tile.id === input.id) ?? { id: input.id }) };
+          for (const key of ['name', 'type', 'probability', 'collision', 'terrain'] as const) {
+            if (input[key] === null) delete next[key];
+            else if (input[key] !== undefined) next[key] = structuredClone(input[key]);
+          }
+          tileset.tiles = [...tileset.tiles.filter(tile => tile.id !== input.id), ...(Object.keys(next).length > 1 ? [next as unknown as TileInfo] : [])];
+        }
+        tileset.tiles.sort((a, b) => a.id - b.id);
+        break;
+      }
       case 'add_layer': {
         requireLayerChanges();
         requireValue(identifier(operation.id) && name(operation.name), 'INVALID_LAYER', 'New layer needs a valid ID and name.');
@@ -646,6 +763,16 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireValue(integer(width) && width >= 1 && integer(height) && height >= 1 && integer(width * height), 'INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
         const dx = coordinate(operation.offsetX ?? 0); const dy = coordinate(operation.offsetY ?? 0);
         const target: Rect = { x: 0, y: 0, width, height };
+        if (doc.tileset) {
+          // Tile IDs follow the grid; whole-tile changes keep each tile's metadata with its pixels.
+          const { tileWidth: tw, tileHeight: th } = doc.tileset;
+          requireValue(!(width % tw) && !(height % th) && !(dx % tw) && !(dy % th), 'TILE_GRID', `With a ${tw}×${th} tile grid, size and offset must be multiples of the tile size. Remove the tile grid first for other sizes.`);
+          const before = tileGrid(doc.tileset, doc.width, doc.height); const after = tileGrid(doc.tileset, width, height);
+          doc.tileset.tiles = doc.tileset.tiles.flatMap(tile => {
+            const column = tile.id % before.columns + dx / tw; const row = Math.floor(tile.id / before.columns) + dy / th;
+            return column >= 0 && row >= 0 && column < after.columns && row < after.rows ? [{ ...tile, id: row * after.columns + column }] : [];
+          }).sort((a, b) => a.id - b.id);
+        }
         for (const frame of doc.frames) {
           for (const layer of doc.layers) {
             const source = frame.cels[layer.id]; const pixels = new Array(width * height).fill(0);

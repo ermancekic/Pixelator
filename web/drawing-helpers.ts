@@ -1,4 +1,4 @@
-import { getFrame, previewOperations } from '../src/engine';
+import { createDocument, getFrame, previewOperations } from '../src/engine';
 import type { Operation, PixelDocument, Rect } from '../src/types';
 import type { Point } from './view-helpers';
 
@@ -38,11 +38,15 @@ export function brushOffsets(size: number, shape: BrushShape = 'square'): [numbe
   return result;
 }
 
-export type StrokeOptions = { brush?: [number, number][]; allow?: (x: number, y: number) => boolean };
-export function strokePixels(points: Point[], width: number, height: number, color: number, mirrorX: boolean, mirrorY: boolean, selection: Rect | null = null, { brush = [[0, 0]], allow }: StrokeOptions = {}): [number, number, number][] {
+export type Wrap = { x: boolean; y: boolean };
+export const NO_WRAP: Wrap = { x: false, y: false };
+const wrapped = (value: number, size: number) => ((value % size) + size) % size;
+export type StrokeOptions = { brush?: [number, number][]; allow?: (x: number, y: number) => boolean; wrap?: Wrap };
+/** Brush cells of a stroke; with wrap, cells beyond an edge continue on the opposite side like a seamless texture. */
+export function strokePixels(points: Point[], width: number, height: number, color: number, mirrorX: boolean, mirrorY: boolean, selection: Rect | null = null, { brush = [[0, 0]], allow, wrap = NO_WRAP }: StrokeOptions = {}): [number, number, number][] {
   const result = new Map<number, [number, number, number]>();
   for (const point of points) for (const [bx, by] of brush) {
-    const px = point.x + bx, py = point.y + by;
+    const px = wrap.x ? wrapped(point.x + bx, width) : point.x + bx, py = wrap.y ? wrapped(point.y + by, height) : point.y + by;
     if (px < 0 || py < 0 || px >= width || py >= height) continue;
     const xs = mirrorX ? [px, width - 1 - px] : [px];
     const ys = mirrorY ? [py, height - 1 - py] : [py];
@@ -138,4 +142,25 @@ export function paintedRegion(doc: PixelDocument, operations: ShapeOperation[], 
     if (painted[i] && (!allow || allow(x, y))) result.push([x, y]);
   }
   return result;
+}
+
+/** Cells of shapes that may reach past the canvas edges, folded back onto the canvas on the wrapping axes. */
+export function wrappedRegion(width: number, height: number, operations: ShapeOperation[], wrap: Wrap, allow?: (x: number, y: number) => boolean): [number, number][] {
+  // Draw on a 3× canvas with the real one in the middle; pointer positions stay within one canvas size beyond each edge.
+  const ox = wrap.x ? width : 0, oy = wrap.y ? height : 0;
+  const probe = createDocument({ width: width + 2 * ox, height: height + 2 * oy, palette: ['#00000000', '#000000'], layers: [{ id: 'probe', name: 'Probe' }] });
+  const shifted = operations.map(({ frameId: _frame, ...operation }): ShapeOperation => {
+    const base = { ...operation, layerId: 'probe', color: 1 };
+    if (base.op === 'line') return { ...base, x1: base.x1 + ox, y1: base.y1 + oy, x2: base.x2 + ox, y2: base.y2 + oy };
+    if (base.op === 'polygon') return { ...base, points: base.points.map(([x, y]) => [x + ox, y + oy] as [number, number]) };
+    return { ...base, x: base.x + ox, y: base.y + oy };
+  });
+  const painted = getFrame(previewOperations(probe, shifted, { layerIds: ['probe'] })).cels.probe;
+  const cells = new Map<number, [number, number]>();
+  for (let i = 0; i < painted.length; i++) {
+    if (!painted[i]) continue;
+    const x = wrapped(i % probe.width - ox, width), y = wrapped(Math.floor(i / probe.width) - oy, height);
+    if (!allow || allow(x, y)) cells.set(y * width + x, [x, y]);
+  }
+  return [...cells.values()];
 }

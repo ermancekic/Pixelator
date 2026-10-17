@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyOperations, createDocument } from '../src/engine.js';
-import { appendStroke, brushOffsets, mirroredShapes, paintedRegion, patternAt, patternPoints, shadePoints, shadeRamp, strokePixels } from '../web/drawing-helpers.js';
+import { appendStroke, brushOffsets, mirroredShapes, paintedRegion, patternAt, patternPoints, shadePoints, shadeRamp, strokePixels, wrappedRegion } from '../web/drawing-helpers.js';
 import type { Pattern } from '../web/drawing-helpers.js';
 import type { Point } from '../web/view-helpers.js';
 import { cel } from './helpers.js';
@@ -133,5 +133,19 @@ describe('brushes, dithering and shading', () => {
     expect(paintedRegion(doc, [{ op: 'rect', layerId, x: 1, y: 1, width: 2, height: 2, color: 0 }], layerId, 'frame-1')).toEqual([[1, 1], [2, 1], [1, 2], [2, 2]]);
     expect(paintedRegion(doc, [{ op: 'rect', layerId, x: 1, y: 1, width: 2, height: 2, color: 0 }], layerId, 'frame-1', x => x === 1)).toEqual([[1, 1], [1, 2]]);
     expect(mirroredShapes({ op: 'polygon', layerId: 'a', points: [[0, 0], [2, 0], [0, 3]], color: 1 }, 8, 8, true, false)[1]).toEqual({ op: 'polygon', layerId: 'a', points: [[7, 0], [5, 0], [7, 3]], color: 1 });
+  });
+});
+
+describe('seamless drawing', () => {
+  it('continues strokes on the opposite side on wrapping axes only', () => {
+    expect(strokePixels([{ x: 4, y: 1 }, { x: -1, y: 1 }], 4, 2, 1, false, false, null, { wrap: { x: true, y: false } })).toEqual([[0, 1, 1], [3, 1, 1]]);
+    expect(strokePixels([{ x: 1, y: 2 }], 4, 2, 1, false, false, null, { wrap: { x: true, y: false } })).toEqual([]);
+    expect(strokePixels([{ x: 1, y: 2 }], 4, 2, 1, false, false, null, { wrap: { x: false, y: true } })).toEqual([[1, 0, 1]]);
+  });
+
+  it('folds shapes that cross the canvas edge back onto the canvas', () => {
+    expect(wrappedRegion(4, 2, [{ op: 'line', layerId: 'a', x1: 2, y1: 0, x2: 5, y2: 0, color: 3 }], { x: true, y: false })).toEqual([[2, 0], [3, 0], [0, 0], [1, 0]]);
+    expect(wrappedRegion(4, 4, [{ op: 'rect', layerId: 'a', x: -1, y: -1, width: 2, height: 2, color: 1 }], { x: true, y: true }).sort()).toEqual([[0, 0], [0, 3], [3, 0], [3, 3]]);
+    expect(wrappedRegion(4, 4, [{ op: 'rect', layerId: 'a', x: -1, y: 0, width: 2, height: 1, color: 1 }], { x: true, y: true }, x => x === 0)).toEqual([[0, 0]]);
   });
 });

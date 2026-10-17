@@ -805,3 +805,46 @@ describe('editor exports and canvas size', () => {
     expect(compact.structuredContent).toMatchObject({ width: 4, height: 4 });
   });
 });
+
+describe('tilesets over REST and MCP', () => {
+  it('creates a tileset, completes an autotile template, previews it and exports Tiled, Godot and Unity files', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Wiese', type: 'tileset', width: 16, height: 12, tileWidth: 2, tileHeight: 2 } });
+    expect(created.statusCode, created.body).toBe(200);
+    const detail = created.json<AssetDetail>();
+    expect(detail.revision.document.tileset).toEqual({ tileWidth: 2, tileHeight: 2, terrainMode: 'mixed', terrains: [], tiles: [] });
+    expect((await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Falsch', type: 'tileset', width: 5, height: 4, tileWidth: 2, tileHeight: 2 } })).json()).toMatchObject({ error: { code: 'INVALID_TILESET' } });
+    const call = (name: string, args: Record<string, unknown>) => rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+    const applied = await call('apply_operations', { assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'blob', editScope: { layerIds: ['body'], allowLayerChanges: true }, operations: [
+      { op: 'rows', layerId: 'body', x: 0, y: 0, rows: ['1122331122', '1122331122'] },
+      { op: 'autotile', layerId: 'body', template: 'blob' },
+      { op: 'tile_properties', tiles: [{ id: 4, name: 'Wiese', collision: [{ x: 0, y: 0, width: 2, height: 2 }] }] },
+    ] });
+    expect(applied.isError, applied.content[0].text).toBeUndefined();
+    const terrain = await call('inspect_asset', { assetId: detail.asset.id, preview: 'terrain', scale: 2 });
+    expect(terrain.content[0]).toMatchObject({ type: 'image', mimeType: 'image/png' });
+    expect(terrain.structuredContent).toMatchObject({ view: { preview: 'terrain', terrain: 1, columns: 14, rows: 9, missingCells: 0 }, imageWidth: 56, imageHeight: 36 });
+    const tiles = await call('inspect_asset', { assetId: detail.asset.id, preview: 'tiles' });
+    expect(tiles.structuredContent).toMatchObject({ view: { preview: 'tiles', gutterColor: '#FF00FF' } });
+    const wrap = await call('inspect_asset', { assetId: detail.asset.id, preview: 'wrap', scales: [1] });
+    expect(wrap.structuredContent).toMatchObject({ imageWidth: 48, imageHeight: 36 });
+    expect(JSON.parse((await call('inspect_asset', { assetId: detail.asset.id, preview: 'terrain', terrain: 3 })).content[0].text!)).toMatchObject({ error: { code: 'UNKNOWN_TERRAIN' } });
+    const tsj = (await app.inject(`/api/assets/${detail.asset.id}/export?format=tsj&extrude=1`)).json();
+    expect(tsj).toMatchObject({ image: 'Wiese.tileset.png', margin: 1, spacing: 2, tilecount: 48, wangsets: [{ type: 'mixed', wangtiles: expect.any(Array) }] });
+    const tres = await app.inject(`/api/assets/${detail.asset.id}/export?format=tres`);
+    expect(tres.headers['content-disposition']).toContain('Wiese.tres');
+    expect(tres.body).toContain('terrain_set_0/mode = 0');
+    const tsx = await app.inject(`/api/assets/${detail.asset.id}/export?format=tsx`);
+    expect(tsx.body).toContain('<wangset name="Terrain" type="mixed" tile="-1">');
+    const image = PNG.sync.read((await app.inject(`/api/assets/${detail.asset.id}/export?format=tileset&extrude=1&spacing=1`)).rawPayload);
+    expect([image.width, image.height]).toEqual([8 * 2 + 7 * 3 + 2, 6 * 2 + 5 * 3 + 2]);
+    expect((await app.inject(`/api/assets/${detail.asset.id}/export?format=unity`)).json()).toMatchObject({ pixelsPerUnit: 2, tiles: [{ sprite: 'Wiese_4', name: 'Wiese' }] });
+    const exported = (await call('export_asset', { assetId: detail.asset.id, format: 'godot' })).structuredContent as { files: { path: string }[] };
+    expect(exported.files.map(file => file.path.split(/[\\/]/).at(-1))).toEqual([expect.stringMatching(/\.tileset\.png$/), expect.stringMatching(/\.tres$/)]);
+    const tiled = (await call('export_asset', { assetId: detail.asset.id, format: 'tiled', extrude: 1 })).structuredContent as { files: { path: string; downloadUrl: string }[] };
+    expect(tiled.files.map(file => file.path.split('.').at(-1))).toEqual(['png', 'tsj', 'tsx']);
+    expect(tiled.files[1].downloadUrl).toContain('extrude=1');
+    const plain = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Ohne', type: 'prop' } })).json<AssetDetail>();
+    expect((await app.inject(`/api/assets/${plain.asset.id}/export?format=tsj`)).json()).toMatchObject({ error: { code: 'NO_TILESET' } });
+  });
+});

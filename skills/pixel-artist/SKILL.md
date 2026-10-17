@@ -29,6 +29,15 @@ Animations are frames of one asset that share its semantic layers, palette and p
 4. Inspect the whole animation as one sprite sheet: `inspect_asset` with `runId` shows all frames in timeline order (or `tag`/`frameIds`), separated by a gutter color outside the palette; add `onion: { "before": 1 }` to see the previous frame tinted blue behind each frame. Review the Artist Guide's Motion point. Finishing as `completed` requires an inspection that showed every frame.
 5. Export with `export_asset` `format: "sheet"` (PNG plus Aseprite-compatible JSON with durations and tags) or `format: "unity"` (one sprite per frame and one clip per tag).
 
+## Tiles
+
+Tilesets are assets with a tile grid (`create_asset` with type `tileset`, `tileWidth`/`tileHeight` and a canvas that is a multiple of them). Tile IDs count row by row; frames animate every tile together.
+
+1. For autotiles draw only the key tiles in the first template row: single, horizontal, vertical, cross (four sides with inner corners) and fill; the edge template needs the first four. Then apply `autotile` with `template` `blob` (47 tiles, mixed terrain), `edge` (16) or `corner` (keys plus 15) and optional `x`/`y` (template origin in tiles). It composes every other tile from quarters of the keys and labels them with Tiled/Godot terrain. Use even tile sizes.
+2. Check seams with `inspect_asset` `preview: "wrap"` (3×3 repetition) for seamless textures, `preview: "tiles"` to judge each tile, and `preview: "terrain"` for a sample map painted by terrain matching; magenta cells and `missingCells` mean missing combinations. Fix key tiles and run `autotile` again rather than editing generated tiles by hand. `shift` with half the tile size moves edges into the middle for cleanup.
+3. Set names, `type`, `probability`, `collision` rectangles and terrain labels with `tile_properties`; terrain uses Tiled's Wang order (top, top-right, right, bottom-right, bottom, bottom-left, left, top-left) plus the center.
+4. Export with `export_asset` `format: "tiled"` (PNG, .tsj, .tsx), `"godot"` (PNG, .tres) or `"unity"`; `extrude: 1` prevents texture bleeding. Level design itself stays in Tiled or the engine.
+
 ## Precise editing
 
 - Read the current document and revision before changing an existing asset. Identify the target layer and source/destination bounds; do not redraw the entire character for a local request. Use `read_pixels` with a `rect` (and `layerId` when needed) to get the exact indices of the region in the same row encoding, edit those rows and write them back with `rows`; reserve `get_asset` `includePixels` for whole-document needs.
@@ -38,6 +47,6 @@ Animations are frames of one asset that share its semantic layers, palette and p
 - Preserve locked layers and everything outside the permitted scope. Inspect the result and its diff, then verify that the requested pixel-distance or color change actually happened. If the canvas prevents the edit, explain the constraint rather than silently resizing or clipping; use `resize_canvas` (full scope, `allowLayerChanges`, `offsetX`/`offsetY` place the old content) only when the user asks for a different canvas size. `merge_layers` destroys semantic layers, so merge only on request.
 - Reuse stored revisions for comparison or recovery. `restore_revision` creates a new current revision; inspect that new revision before finalizing it.
 
-Technical validity is measurable; silhouette readability, style, lighting and identity require visual judgment. Reviews and scores are observations, not proof of art quality. Tilesets and asset-pack orchestration are later extensions; do not claim those exports exist without matching tools.
+Technical validity is measurable; silhouette readability, style, lighting and identity require visual judgment. Reviews and scores are observations, not proof of art quality. Tile maps (level layouts) and asset-pack orchestration are not part of Pixelator; do not claim those exports exist.
 
 Judge small assets at their native size as well as enlarged. Reserve contrasting pixels for the features that explain the object: a character's face and equipment, or a bottle's neck and stopper. A correct outline and palette do not make a featureless shape game-readable.
