@@ -109,6 +109,25 @@ describe('transaction boundaries', () => {
 });
 
 describe('project portability and revision ownership', () => {
+  it('round-trips duplicate layers and extended fill operations without changing their source', () => {
+    const { store, project, detail } = setup();
+    const result = store.apply(detail.asset.id, request(detail, 'layer-copy-and-fill', {
+      editScope: { layerIds: ['body'], allowLayerChanges: true },
+      operations: [
+        { op: 'pixels', layerId: 'body', points: [[1, 1, 1], [2, 1, 1]] },
+        { op: 'duplicate_layer', layerId: 'body', id: 'copy', name: 'Body variation' },
+        { op: 'fill', layerId: 'copy', x: 0, y: 0, color: 2, reference: 'composite', contiguous: false },
+      ],
+    }));
+    expect(result.revision.document.layers[0].pixels.filter(Boolean)).toEqual([1, 1]);
+    expect(result.revision.document.layers[1].pixels.filter(color => color === 2)).toHaveLength(62);
+    const imported = store.importProject(store.exportProject(project.id));
+    const copy = store.listAssets(imported.id)[0];
+    const revision = store.getAsset(copy.id).revision;
+    expect(revision.document).toEqual(result.revision.document);
+    expect(revision.operations).toEqual(result.revision.operations);
+  });
+
   it('can repeatedly import a project whose original name has the maximum length', () => {
     const store = open();
     let project = store.createProject({ name: 'x'.repeat(160) });

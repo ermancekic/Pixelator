@@ -2,7 +2,15 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
-## Automatisierte Prüfungen
+## Ergänzung: Pixelorama-Zeichenhilfen
+
+Am 17. Oktober 2026 wurden **101 Tests in 7 Dateien** erfolgreich ausgeführt; TypeScript-Prüfung und Produktionsbuild bestehen. Neue Regressionstests decken Zeichensymmetrie, Pixel-Perfect, die Füllreferenz über sichtbare Ebenen, globale Farbflächen, Ebenenduplikate und deren REST-/MCP-/Projektimport-Verhalten ab.
+
+Die Browserprüfung lief mit einer separaten In-Memory-Datenbank auf Port 4318. Das Füllen anhand zweier sichtbarer Konturen schrieb exakt **84 Pixel** auf die getrennte Farbebene; die **56 Konturpixel**, Außenbereich und innere Fläche blieben erhalten. Duplizieren erzeugte eine identische Ebene direkt über der Quelle; Rückgängig und Wiederholen funktionierten. Ein Stiftklick mit beiden Symmetrieachsen schrieb exakt vier Eckpixel auf das Duplikat und ließ die Quelle unverändert. Die gekachelte Vorschau enthielt neun Zellen; bei 4× wurden 16×16-Raster mit exakt 64×64 CSS-Pixeln angezeigt, mit hellem Hintergrund und Scrollbereich. Diese Stichprobe bewertet die Bedienung, keine künstlerische Qualität.
+
+Der normale Dienst auf Port 4317 wurde anschließend mit dem neuen Code gestartet. Alle **13 Projekte und 48 Assets** hatten nach dem Neustart identische Metadaten und Head-Revisions-IDs; die Testinstanz schrieb nicht in deren Datenbank.
+
+## Automatisierte Prüfungen der Erstabnahme
 
 `npm test`: **74 Tests bestanden** (Engine 24, PNG/Unity 13, Speicher 13, HTTP/MCP 15, stdio 1, Navigation/Hotkeys 8). `npm run build` einschließlich TypeScript-Prüfung besteht. Nach der Umstellung auf npm wurde eine saubere Installation mit `npm ci` aus der `package-lock.json` erfolgreich geprüft; die Versionen aller 17 direkten Abhängigkeiten bleiben unverändert. Die formale Skill-Validierung wurde bei der Erstabnahme geprüft.
 

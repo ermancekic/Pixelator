@@ -52,6 +52,50 @@ afterEach(async () => {
 });
 
 describe('local REST editing', () => {
+  it('shares duplicate layers and composite/global fill through REST, MCP and project import', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const outline = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: {
+      expectedRevision: detail.revision.id, requestId: 'rest-outline',
+      editScope: { layerIds: ['sword'] },
+      operations: [{ op: 'rect', layerId: 'sword', x: 0, y: 0, width: 5, height: 3, color: 1, filled: false }],
+    } });
+    expect(outline.statusCode, outline.body).toBe(200);
+    const outlined = outline.json<ApplyResult>();
+    const operations: ApplyRequest['operations'] = [
+      { op: 'duplicate_layer', layerId: 'body', id: 'color-copy', name: 'Color copy' },
+      { op: 'fill', layerId: 'color-copy', x: 1, y: 1, color: 2, reference: 'composite', contiguous: true },
+      { op: 'fill', layerId: 'color-copy', x: 1, y: 1, color: 3, reference: 'layer', contiguous: false },
+    ];
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const response = await fetch(`${address}/mcp`, { method: 'POST', headers: mcpHeaders, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'apply_operations', arguments: {
+      assetId: detail.asset.id, expectedRevision: outlined.revision.id, requestId: 'mcp-copy-fill',
+      editScope: { layerIds: ['body', 'sword'], allowLayerChanges: true }, operations,
+    } } }) });
+    expect(response.status).toBe(200);
+    const edited = (await response.json() as { result: ToolResult }).result;
+    expect(edited.isError, JSON.stringify(edited.content)).not.toBe(true);
+    const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
+    expect(current.revision.document.layers.map(layer => layer.id)).toEqual(['body', 'color-copy', 'sword']);
+    expect(current.revision.document.layers[0]).toEqual(detail.revision.document.layers[0]);
+    expect(current.revision.document.layers[2]).toEqual(outlined.revision.document.layers[1]);
+    expect(current.revision.document.layers[1].pixels.filter(Boolean)).toEqual([3, 3, 3]);
+    expect(current.revision.operations).toEqual(operations);
+    const bundle = (await app.inject(`/api/projects/${project.id}/export`)).json();
+    const imported = await app.inject({ method: 'POST', url: '/api/projects/import', payload: { project: bundle } });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const assets = (await app.inject(`/api/assets?projectId=${imported.json<Project>().id}`)).json<Asset[]>();
+    const copy = (await app.inject(`/api/assets/${assets[0].id}`)).json<AssetDetail>();
+    expect(copy.revision.document).toEqual(current.revision.document);
+    expect(copy.revision.operations).toEqual(operations);
+    const invalid = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: {
+      expectedRevision: current.revision.id, requestId: 'invalid-fill-option',
+      editScope: { layerIds: ['body'] },
+      operations: [{ op: 'fill', layerId: 'body', x: 0, y: 0, color: 1, contiguous: 'false' }],
+    } });
+    expect(invalid.statusCode).toBe(400);
+    expect((await app.inject(`/api/assets/${detail.asset.id}`)).json()).toEqual(current);
+  });
+
   it('creates, edits and round-trips larger rectangular assets and project defaults', async () => {
     const app = await open(); const { project } = await setup(app);
     const updated = await app.inject({ method: 'PATCH', url: `/api/projects/${project.id}`, payload: { style: { ...project.style, width: 128, height: 96 } } });
