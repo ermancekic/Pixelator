@@ -67,9 +67,9 @@ export default function App() {
   viewRef.current = view; dialogRef.current = dialog;
   detailRef.current = detail; busyRef.current = busy; loadingRef.current = loading; projectIdRef.current = projectId;
   const project = projects.find(p => p.id === projectId); const document = preview ?? viewRevision?.document ?? detail?.revision.document; const activeLayer = document?.layers.find(l => l.id === layerId);
-  const activeFrame = document ? document.frames.find(f => f.id === selectedFrameId) ?? document.frames[0] : undefined; const frameId = activeFrame?.id ?? '';
-  const frameIndex = document && activeFrame ? document.frames.indexOf(activeFrame) : 0; const animated = (document?.frames.length ?? 0) > 1;
-  const playingFrameId = playback && document ? document.frames[playback.index]?.id ?? null : null; const onionVisible = animated && (onion.before > 0 || onion.after > 0);
+  const playingFrameId = playback && document ? document.frames[playback.index]?.id ?? null : null;
+  const activeFrame = document ? document.frames.find(f => f.id === (playingFrameId ?? selectedFrameId)) ?? document.frames[0] : undefined; const frameId = activeFrame?.id ?? '';
+  const frameIndex = document && activeFrame ? document.frames.indexOf(activeFrame) : 0; const animated = (document?.frames.length ?? 0) > 1; const onionVisible = animated && (onion.before > 0 || onion.after > 0);
   const color = Math.min(colorIndex, (document?.palette.length ?? 2) - 1);
   const validation = viewRevision?.validation ?? detail?.revision.validation;
   const viewingPast = !!viewRevision && viewRevision.id !== detail?.asset.headRevisionId;
@@ -130,6 +130,7 @@ export default function App() {
     // Each frame stays visible for its own duration, like Pixelorama's one-shot animation timer.
     const timer = window.setTimeout(() => {
       const next = nextPlayback(playback, playbackRange(document.frames.length, document.tags, playback.index, onlyTag), loopMode);
+      setSelectedFrameId(document.frames[next.index]?.id ?? '');
       setPlayback(next.playing ? next : null);
     }, frame.durationMs);
     return () => window.clearTimeout(timer);
@@ -237,7 +238,7 @@ export default function App() {
         case 'actual-size': if (document) setView({ zoom: 1, pan: { x: 0, y: 0 } }); break;
         case 'grid': setGrid(value => !value); break;
         case 'help': showDialog('shortcuts'); break;
-        case 'previous-frame': case 'next-frame': if (document) { const count = document.frames.length; setSelectedFrameId(document.frames[(frameIndex + (action === 'next-frame' ? 1 : -1) + count) % count].id); } break;
+        case 'previous-frame': case 'next-frame': if (document) { const count = document.frames.length; selectFrame(document.frames[(frameIndex + (action === 'next-frame' ? 1 : -1) + count) % count].id); } break;
         case 'play': togglePlay(); break;
         case 'onion': setOnion(current => current.before || current.after ? { before: 0, after: 0 } : { before: 1, after: 0 }); break;
         case 'delete': clearSelection(); break;
@@ -318,7 +319,7 @@ export default function App() {
     } catch (e) { current.operations = []; setPreview(null); setNotice((e as Error).message); }
   };
   const pointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!document || !detail || event.button !== 0 || !event.isPrimary || !editable || spaceHeldRef.current || tool === 'pan' || panDrag.current || stroke.current) return; event.preventDefault(); stageRef.current?.focus({ preventScroll: true }); if (busyRef.current) return; const p = position(event); setCursor(p);
+    if (!document || !detail || event.button !== 0 || !event.isPrimary || !editable || spaceHeldRef.current || tool === 'pan' || panDrag.current || stroke.current) return; event.preventDefault(); stageRef.current?.focus({ preventScroll: true }); if (busyRef.current) return; if (playback) setPlayback(null); const p = position(event); setCursor(p);
     if (tool === 'eyedropper') { const index = p.y * document.width + p.x; let next = 0; const cels = getFrame(document, frameId).cels; for (let i = document.layers.length - 1; i >= 0; i--) { const layer = document.layers[i]; if (layer.visible && cels[layer.id][index]) { next = cels[layer.id][index]; break; } } setColor(next); return; }
     if (tool !== 'selection' && !canDraw) { flash('Wähle eine sichtbare, entsperrte Ebene.'); return; }
     if (tool === 'fill') {
@@ -345,8 +346,9 @@ export default function App() {
     if (current.tool !== 'selection' && completed.operations.length) { if (current.tool === 'move' && selection) setSelection({ ...selection, x: selection.x + completed.last.x - current.start.x, y: selection.y + completed.last.y - current.start.y }); void apply(completed.operations, current.copy ? 'Auswahl kopiert' : tools.find(t => t.id === current.tool)?.label ?? 'Zeichnen', completed.scope); } else setPreview(null);
   };
   const pngExportUrl = (assetId: string) => `/api/assets/${assetId}/export?format=png${animated ? `&frameId=${encodeURIComponent(frameId)}` : ''}`;
+  const selectFrame = (id: string) => { setPlayback(null); setSelectedFrameId(id); };
   const togglePlay = () => { if (playback) setPlayback(null); else if (document && animated) setPlayback({ index: frameIndex, direction: 1, playing: true }); };
-  const frameCommand = async (operations: Operation[], label: string, select?: string) => { const result = await apply(operations, label); if (result && select) setSelectedFrameId(select); return result; };
+  const frameCommand = async (operations: Operation[], label: string, select?: string) => { setPlayback(null); const result = await apply(operations, label); if (result && select) setSelectedFrameId(select); return result; };
   const addFrame = () => { if (!document || !activeFrame) return; const id = nextFrameId(document.frames); void frameCommand([{ op: 'add_frame', id, index: frameIndex + 1, durationMs: activeFrame.durationMs }], 'Frame eingefügt', id); };
   const duplicateFrame = () => { if (!document) return; const id = nextFrameId(document.frames); void frameCommand([{ op: 'duplicate_frame', frameId, id }], 'Frame dupliziert', id); };
   const removeFrame = () => { if (!document || !animated || !window.confirm(`Frame ${frameIndex + 1} löschen? Du kannst die Änderung rückgängig machen.`)) return; void frameCommand([{ op: 'remove_frame', frameId }], 'Frame gelöscht', document.frames[frameIndex + 1]?.id ?? document.frames[frameIndex - 1]?.id); };
@@ -438,7 +440,7 @@ export default function App() {
           </div>
         </div>
         <div className="canvas-status"><span><span className={`status-dot${busy ? ' saving' : ''}`}/>{busy ? 'Wird gespeichert …' : preview ? 'Zeichnen …' : detail ? 'Gespeichert' : 'Bereit'}</span><span>{cursor ? `X ${cursor.x} · Y ${cursor.y}` : 'X — · Y —'}<i/>{document?.layers.length ?? 0} Ebenen<i/>{validation?.colorCount ?? 0} Farben</span></div>
-        {detail && document && activeFrame && <Timeline doc={document} frameId={frameId} playingFrameId={playingFrameId} editable={editable} loop={loopMode} onlyTag={onlyTag} onion={onion} onSelect={setSelectedFrameId} onTogglePlay={togglePlay} onLoop={setLoopMode} onOnlyTag={setOnlyTag} onOnion={setOnion} onAdd={addFrame} onDuplicate={duplicateFrame} onRemove={removeFrame} onMove={moveFrame} onDuration={durationMs => void frameCommand([{ op: 'frame_duration', frameIds: [frameId], durationMs }], 'Frame-Dauer geändert')} onEditTags={() => showDialog('tags')}/>}
+        {detail && document && activeFrame && <Timeline doc={document} frameId={frameId} playingFrameId={playingFrameId} editable={editable} loop={loopMode} onlyTag={onlyTag} onion={onion} onSelect={selectFrame} onTogglePlay={togglePlay} onLoop={setLoopMode} onOnlyTag={setOnlyTag} onOnion={setOnion} onAdd={addFrame} onDuplicate={duplicateFrame} onRemove={removeFrame} onMove={moveFrame} onDuration={durationMs => void frameCommand([{ op: 'frame_duration', frameIds: [frameId], durationMs }], 'Frame-Dauer geändert')} onEditTags={() => showDialog('tags')}/>}
         <section className="agent-panel" aria-label="KI-Agenten-Auftrag"><div className="agent-panel-content"><div><h2>Agenten-Auftrag</h2></div><p>Auftrag kopieren und in Codex, Claude oder Antigravity einfügen.</p><div className="agent-input"><input aria-label="Auftrag für deinen KI-Agenten" placeholder="z. B. Schwert um 3 Pixel verlängern" value={prompt} onChange={e => setPrompt(e.target.value)} disabled={!detail}/><button onClick={() => void copyOrder()} disabled={!detail}><Icon name="copy" size={15}/> Auftrag kopieren</button></div></div></section>
       </section>
       <aside className="inspector" aria-label="Eigenschaften">
