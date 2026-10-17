@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from 'react';
+import { useT } from './i18n';
+import { PANELS_RESET } from './settings';
 
 interface ResizablePanelProps {
   id: string;
@@ -13,6 +15,7 @@ interface ResizablePanelProps {
 }
 
 export function ResizablePanel({ id, label, className, as: Tag = 'section', edge, minSize, flexiblePanel, children }: ResizablePanelProps) {
+  const t = useT();
   const dimension = edge === 'left' || edge === 'right' ? 'width' : 'height';
   const direction = edge === 'left' || edge === 'top' ? -1 : 1;
   const storageKey = `pixelator.panel.${id}`;
@@ -28,6 +31,10 @@ export function ResizablePanel({ id, label, className, as: Tag = 'section', edge
     } catch { return null; }
   });
   const [bounds, setBounds] = useState({ size: minSize, max: Number.MAX_SAFE_INTEGER });
+  useEffect(() => {
+    const reset = () => setPreferredSize(null);
+    window.addEventListener(PANELS_RESET, reset); return () => window.removeEventListener(PANELS_RESET, reset);
+  }, []);
 
   const measure = useCallback(() => {
     const panel = panelRef.current;
@@ -116,6 +123,6 @@ export function ResizablePanel({ id, label, className, as: Tag = 'section', edge
 
   return <Tag id={id} ref={panelRef} className={`resizable-panel ${className}${preferredSize === null ? '' : ' has-panel-size'}`} aria-label={label} style={preferredSize === null ? undefined : { [dimension]: flexiblePanel ? preferredSize : Math.min(preferredSize, bounds.max) } as CSSProperties}>
     <div className="panel-content">{children}</div>
-    <div ref={handleRef} className={`panel-resizer panel-resizer-${edge}${resizing ? ' is-resizing' : ''}`} role="separator" tabIndex={0} aria-label={`${label}: Größe ändern`} aria-controls={id} aria-orientation={dimension === 'width' ? 'vertical' : 'horizontal'} aria-valuemin={minSize} aria-valuemax={bounds.max} aria-valuenow={bounds.size} aria-valuetext={`${bounds.size} Pixel`} title="Ziehen zum Vergrößern oder Verkleinern · Doppelklick zum Zurücksetzen" onPointerDown={start} onPointerMove={move} onPointerUp={event => { move(event); stop(event); }} onPointerCancel={stop} onLostPointerCapture={stop} onDoubleClick={() => setPreferredSize(null)} onKeyDown={keydown}/>
+    <div ref={handleRef} className={`panel-resizer panel-resizer-${edge}${resizing ? ' is-resizing' : ''}`} role="separator" tabIndex={0} aria-label={t('{panel}: Größe ändern', { panel: label })} aria-controls={id} aria-orientation={dimension === 'width' ? 'vertical' : 'horizontal'} aria-valuemin={minSize} aria-valuemax={bounds.max} aria-valuenow={bounds.size} aria-valuetext={`${bounds.size} Pixel`} title={t('Ziehen zum Vergrößern oder Verkleinern · Doppelklick zum Zurücksetzen')} onPointerDown={start} onPointerMove={move} onPointerUp={event => { move(event); stop(event); }} onPointerCancel={stop} onLostPointerCapture={stop} onDoubleClick={() => setPreferredSize(null)} onKeyDown={keydown}/>
   </Tag>;
 }

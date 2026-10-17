@@ -86,6 +86,13 @@ describe('editor shortcuts', () => {
     expect(resolveShortcut({ key: 'f', ctrlKey: true })).toBeNull();
   });
 
+  it('maps the VS Code style window shortcuts', () => {
+    expect(resolveShortcut({ key: ',', ctrlKey: true })).toBe('settings');
+    expect(resolveShortcut({ key: 'b', metaKey: true })).toBe('toggle-library');
+    expect(resolveShortcut({ key: 'j', ctrlKey: true })).toBe('toggle-timeline');
+    expect(resolveShortcut({ key: ',' })).toBe('previous-frame');
+  });
+
   it('does nothing in inputs, modals, IME composition, or with Alt held', () => {
     for (const key of [' ', 'p', '?', '+', 'g', 'Delete']) expect(resolveShortcut({ key }, true)).toBeNull();
     expect(resolveShortcut({ key: 'p', isComposing: true })).toBeNull();

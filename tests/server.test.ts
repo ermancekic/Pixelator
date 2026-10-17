@@ -601,7 +601,7 @@ describe('MCP transport', () => {
     const compact = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail) } });
     const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
     expect(compact.structuredContent).toEqual({
-      assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixel bearbeitet', width: 8, height: 8,
+      assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixels edited', width: 8, height: 8,
       diff: { changedPixels: 2, changedLayers: ['body'], changedFrames: ['frame-1'], boundingBox: { x: 1, y: 1, width: 2, height: 1 } },
       validation: { valid: true, colorCount: 2, opaquePixels: 2, boundingBox: { x: 1, y: 1, width: 2, height: 1 }, isolatedPixels: 0, issues: [] },
       layers: [{ id: 'body', visible: true, locked: false }, { id: 'sword', visible: true, locked: false }],

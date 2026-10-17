@@ -1,36 +1,37 @@
-![Pixelator – dein Pixel-Art-Studio](docs/assets/readme-header.png)
+![Pixelator – your pixel art studio](docs/assets/readme-header.gif)
 
 # Pixelator
 
-Lokaler Pixel-Art-Editor mit MCP für Codex, Claude und Antigravity. Benötigt Node.js **ab 24.13**.
+Local pixel art editor with MCP for Codex, Claude and Antigravity. Requires Node.js **24.13 or newer**.
 
 ## Features
 
-- Projekte und Stilprofile
-- Ebenen mit Sichtbarkeit, Sperren, Duplikaten und Zusammenführen
-- Stift, Radierer, Pipette, Linien, Formen und Polygon
-- Pinselgrößen, Dithering-Muster, Schattieren und Zweitfarbe
-- Füllen: zusammenhängend/global, Ebene/Gesamtbild
-- Rechteckauswahl, Lasso und Zauberstab; Verschieben und Kopieren
-- Zwischenablage zwischen Assets und mit anderen Programmen
-- Spiegeln, Drehen, Kontur und Farbe ersetzen
-- Leinwandgröße ändern und zuschneiden
-- Zeichensymmetrie und Pixel-Perfect-Stift
-- Paletten mit Import/Export (GPL, PAL, HEX) und Transparenz
-- Referenzbild zum Abpausen
-- Tilesets mit Kachelraster, Kollision und Terrain
-- Autotiles (Blob, Kanten, Ecken) aus fünf Schlüsselkacheln und Terrain-Testkarte
-- Nahtloses Zeichnen
-- Tileset-Export für Tiled, Godot und Unity
-- Zoom, Handwerkzeug, Raster und Tastenkürzel
-- Größenverstellbare Bereiche mit gespeicherter Fensteraufteilung
-- Vorschau mit 3×3-Kachelung
-- Revisionen, Rückgängig und Wiederholen
-- Asset-Varianten
-- Animation: Frames, Dauer pro Frame, Tags, Onion Skin und Wiedergabe
-- PNG-, Sprite-Sheet- und Projektimport
-- PNG-/JSON-Export, Sprite-Sheet mit Aseprite-JSON, GIF und Unity-Metadaten mit Pivot; Bildexporte 1–16×
-- MCP-Aufträge, Bildinspektion, kompakte Rasterein-/ausgabe und Agentenstatus
+- Projects and style profiles
+- Layers with visibility, locking, duplicating and merging
+- Pencil, eraser, eyedropper, lines, shapes and polygon
+- Brush sizes, dither patterns, shading and secondary color
+- Fill: contiguous or global, layer or whole image
+- Rectangle, lasso and magic wand selection; move and copy
+- Clipboard between assets and other programs
+- Flip, rotate, outline and color replacement
+- Canvas resize and crop
+- Drawing symmetry and pixel-perfect pencil
+- Palettes with import/export (GPL, PAL, HEX) and transparency
+- Reference image for tracing
+- Tilesets with tile grid, collision and terrain
+- Autotiles (blob, edges, corners) from five key tiles, with a terrain test map
+- Seamless drawing
+- Tileset export for Tiled, Godot and Unity
+- Zoom, hand tool, grids and keyboard shortcuts
+- Menu bar, settings and resizable panels
+- English and German interface
+- Preview with fit zoom and 3×3 tiling
+- Revisions, undo and redo
+- Asset variants
+- Animation: frames, per-frame duration, tags, onion skin and playback
+- PNG, sprite sheet and project import
+- Export window with live preview: PNG, sprite sheet with Aseprite JSON, GIF, tileset, Unity, palette and project file; images 1–16×
+- MCP runs, image inspection, compact raster input/output and agent status
 
 ## Start
 
@@ -40,11 +41,11 @@ npm run build
 npm start
 ```
 
-[Editor öffnen](http://127.0.0.1:4317). Das Terminal während der Nutzung geöffnet lassen.
+[Open the editor](http://127.0.0.1:4317). Keep the terminal open while you work.
 
-## MCP verbinden
+## Connect MCP
 
-Bei laufender App und eingeschaltetem MCP-Server:
+With the app running and the MCP server switched on:
 
 ```powershell
 # Codex
@@ -54,14 +55,14 @@ codex mcp add pixelator --url http://127.0.0.1:4317/mcp
 claude mcp add --transport http pixelator http://127.0.0.1:4317/mcp --scope user
 ```
 
-**Antigravity:** Unter **MCP Servers → Manage MCP Servers → View raw config** ergänzen; vorhandene Server beibehalten:
+**Antigravity:** add this under **MCP Servers → Manage MCP Servers → View raw config** and keep your existing servers:
 
 ```json
 { "mcpServers": { "pixelator": { "serverUrl": "http://127.0.0.1:4317/mcp" } } }
 ```
 
-Danach die MCP-Verbindung im Client neu laden. [Weitere Details](docs/mcp.md) · [Editor](docs/editor.md) · [Tiles](docs/tiles.md) · [Tests](docs/testing.md)
+Then reload the MCP connection in the client. [More details](docs/mcp.md) · [Editor](docs/editor.md) · [Tiles](docs/tiles.md) · [Tests](docs/testing.md)
 
-Daten liegen in `data/`. Für Backups die App beenden und den Ordner sichern.
+Data lives in `data/`. For backups, stop the app and copy the folder.
 
-![Pixelator Panorama](docs/assets/readme-footer.png)
+![Pixelator panorama](docs/assets/readme-footer.gif)

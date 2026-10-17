@@ -3,11 +3,15 @@ import { composite, createDocument, DEFAULT_FRAME_MS, MAX_FRAMES, readIndices } 
 import { encodeGif } from './gif.js';
 import { renderTerrainMap, terrainMap, tileGrid } from './tiles.js';
 import type { TerrainMap } from './tiles.js';
-import { AppError } from './store.js';
+import { AppError } from './errors.js';
+import { framesFor, gifFrameIds, GUTTER_CANDIDATES, ONION_COLORS, sheetLayout } from './export-layout.js';
+import type { SheetLayout, SheetOptions } from './export-layout.js';
+export { framesFor, gifFrameIds, ONION_COLORS, sheetLayout } from './export-layout.js';
+export type { SheetCell, SheetLayout, SheetOptions } from './export-layout.js';
 import type { AnimationTag, PixelDocument } from './types.js';
 
 const validScale = (scale: number) => {
-  if (!Number.isInteger(scale) || scale < 1 || scale > 32) throw new AppError('RENDER_SIZE', 'Zoom muss ganzzahlig sein und zwischen 1 und 32 liegen.');
+  if (!Number.isInteger(scale) || scale < 1 || scale > 32) throw new AppError('RENDER_SIZE', 'Zoom must be a whole number from 1 to 32.');
 };
 
 /** Copies an RGBA raster into the PNG at (left, top), enlarged by nearest neighbor. */
@@ -33,7 +37,7 @@ export function renderPng(document: PixelDocument, scale = 1, frameId?: string):
 }
 
 export function renderThumbnail(document: PixelDocument, maxSize = 96): Buffer {
-  if (!Number.isSafeInteger(maxSize) || maxSize < 1) throw new AppError('RENDER_SIZE', 'Die Vorschaudimension muss eine positive ganze Zahl sein.');
+  if (!Number.isSafeInteger(maxSize) || maxSize < 1) throw new AppError('RENDER_SIZE', 'The preview size must be a positive whole number.');
   const rgba = composite(document);
   const factor = Math.min(1, maxSize / Math.max(document.width, document.height));
   const width = Math.max(1, Math.round(document.width * factor)); const height = Math.max(1, Math.round(document.height * factor));
@@ -47,38 +51,7 @@ export function renderThumbnail(document: PixelDocument, maxSize = 96): Buffer {
   return PNG.sync.write(png);
 }
 
-// Onion tints follow Pixelorama's blue (previous) / red (next) mode and fade with distance.
-export const ONION_COLORS = { before: ['#3060FF', '#7090FF', '#B0C0FF'], after: ['#FF4040', '#FF8080', '#FFC0C0'] } as const;
-const GUTTER_CANDIDATES = ['#FF00FF', '#00FFFF', '#FFFF00', '#00FF00', '#FF8000', '#8000FF'];
 const rgb = (hex: string) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), 255];
-
-export interface SheetOptions { frameIds?: string[]; columns?: number; scale?: number; gutter?: number; onion?: { before?: number; after?: number } }
-export interface SheetCell { frameId: string; column: number; row: number; x: number; y: number; width: number; height: number; durationMs: number }
-export interface SheetLayout { columns: number; rows: number; gutter: number; gutterColor: string | null; width: number; height: number; cells: SheetCell[] }
-
-/** Positions of the frames in a sheet, in source pixels (before scaling). */
-export function sheetLayout(document: PixelDocument, { frameIds, columns, gutter = 0 }: SheetOptions = {}): SheetLayout {
-  const ids = frameIds ?? document.frames.map(frame => frame.id);
-  if (!ids.length) throw new AppError('INVALID_FRAMES', 'Mindestens ein Frame ist erforderlich.');
-  const frames = ids.map(id => {
-    const frame = document.frames.find(item => item.id === id);
-    if (!frame) throw new AppError('UNKNOWN_FRAME', `Frame ${id} existiert nicht.`);
-    return frame;
-  });
-  const count = Math.max(1, Math.min(columns ?? frames.length, frames.length));
-  if (!Number.isInteger(count) || !Number.isInteger(gutter) || gutter < 0 || gutter > 8) throw new AppError('INVALID_LAYOUT', 'Spalten und Abstand müssen gültige ganze Zahlen sein.');
-  const rows = Math.ceil(frames.length / count);
-  const palette = document.palette.map(color => color.toUpperCase());
-  const gutterColor = gutter ? GUTTER_CANDIDATES.find(color => !palette.includes(color)) ?? GUTTER_CANDIDATES[0] : null;
-  return {
-    columns: count, rows, gutter, gutterColor,
-    width: count * document.width + (count - 1) * gutter, height: rows * document.height + (rows - 1) * gutter,
-    cells: frames.map((frame, index) => {
-      const column = index % count; const row = Math.floor(index / count);
-      return { frameId: frame.id, column, row, x: column * (document.width + gutter), y: row * (document.height + gutter), width: document.width, height: document.height, durationMs: frame.durationMs };
-    }),
-  };
-}
 
 /** Renders frames side by side; gutters and onion tints are inspection aids, not asset pixels. */
 export function renderSheet(document: PixelDocument, options: SheetOptions = {}): { png: Buffer; layout: SheetLayout } {
@@ -112,21 +85,11 @@ export function renderSheet(document: PixelDocument, options: SheetOptions = {})
   return { png: PNG.sync.write(png), layout };
 }
 
-/** Frames of a tag in timeline order, or all frames. */
-export function framesFor(document: PixelDocument, tagName?: string): string[] {
-  if (tagName === undefined) return document.frames.map(frame => frame.id);
-  const tag = document.tags.find(item => item.name === tagName);
-  if (!tag) throw new AppError('UNKNOWN_TAG', `Tag ${tagName} existiert nicht.`);
-  return document.frames.slice(tag.from, tag.to + 1).map(frame => frame.id);
-}
-
 /** Animated GIF of all frames or one tag, honoring the tag's direction and loop flag; index 0 stays transparent. */
 export function renderGif(document: PixelDocument, { tag: tagName, scale = 1 }: { tag?: string; scale?: number } = {}): Buffer {
-  if (!Number.isInteger(scale) || scale < 1 || scale > 16) throw new AppError('RENDER_SIZE', 'GIF-Zoom muss ganzzahlig sein und zwischen 1 und 16 liegen.');
+  if (!Number.isInteger(scale) || scale < 1 || scale > 16) throw new AppError('RENDER_SIZE', 'GIF zoom must be a whole number from 1 to 16.');
   const tag = tagName === undefined ? undefined : document.tags.find(item => item.name === tagName);
-  let ids = framesFor(document, tagName);
-  if (tag?.direction === 'reverse') ids = [...ids].reverse();
-  if (tag?.direction === 'pingpong' && ids.length > 2) ids = [...ids, ...ids.slice(1, -1).reverse()];
+  const ids = gifFrameIds(document, tagName);
   const width = document.width * scale; const height = document.height * scale;
   const frames = ids.map(id => {
     const source = readIndices(document, undefined, id);
@@ -166,18 +129,18 @@ export function sheetManifest(name: string, image: string, document: PixelDocume
 
 export function importPng(base64: string, maxColors: number, paletteLocked = false): PixelDocument {
   const bytes = Buffer.from(base64.replace(/^data:image\/png;base64,/, ''), 'base64');
-  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new AppError('PNG_REQUIRED', 'Eine gültige PNG-Datei ist erforderlich.');
+  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new AppError('PNG_REQUIRED', 'A valid PNG file is required.');
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
-  if (width < 1 || height < 1) throw new AppError('PNG_SIZE', 'PNG-Abmessungen müssen positiv sein.');
+  if (width < 1 || height < 1) throw new AppError('PNG_SIZE', 'PNG dimensions must be positive.');
   let image: PNG;
   try { image = PNG.sync.read(bytes, { checkCRC: true }); }
-  catch { throw new AppError('PNG_INVALID', 'Die PNG-Datei konnte nicht verlustfrei gelesen werden.'); }
+  catch { throw new AppError('PNG_INVALID', 'The PNG file could not be read losslessly.'); }
   const palette = ['#00000000'];
   const colors = new Map<number, number>(); const pixels = new Array<number>(image.width * image.height);
   for (let i = 0; i < image.data.length; i += 4) {
     const alpha = image.data[i + 3];
-    if (alpha !== 0 && alpha !== 255) throw new AppError('PARTIAL_ALPHA', 'Teiltransparente Pixel werden nicht automatisch verändert. Bitte vorher ausdrücklich konvertieren.');
+    if (alpha !== 0 && alpha !== 255) throw new AppError('PARTIAL_ALPHA', 'Semi-transparent pixels are not changed automatically. Convert them explicitly first.');
     if (!alpha) { pixels[i / 4] = 0; continue; }
     const color = image.data[i] * 65536 + image.data[i + 1] * 256 + image.data[i + 2];
     let index = colors.get(color);
@@ -185,7 +148,7 @@ export function importPng(base64: string, maxColors: number, paletteLocked = fal
       palette.push(`#${color.toString(16).padStart(6, '0').toUpperCase()}`); index = palette.length - 1;
       colors.set(color, index);
     }
-    if (palette.length - 1 > maxColors) throw new AppError('PALETTE_LIMIT', `Das Bild enthält mehr als ${maxColors} Farben. Keine automatische Quantisierung.`);
+    if (palette.length - 1 > maxColors) throw new AppError('PALETTE_LIMIT', `The image has more than ${maxColors} colors. Pixelator does not quantize automatically.`);
     pixels[i / 4] = index;
   }
   if (palette.length === 1) palette.push('#000000');
@@ -196,7 +159,7 @@ export function importPng(base64: string, maxColors: number, paletteLocked = fal
 
 /** Cuts an imported sheet into frames of equal size, row by row; without frameCount, trailing empty cells are dropped. */
 export function sliceSheet(sheet: PixelDocument, frameWidth: number, frameHeight: number, options: { frameCount?: number; durationMs?: number } = {}): PixelDocument {
-  if (!Number.isInteger(frameWidth) || frameWidth < 1 || !Number.isInteger(frameHeight) || frameHeight < 1 || sheet.width % frameWidth || sheet.height % frameHeight) throw new AppError('SHEET_SIZE', 'Breite und Höhe des Bildes müssen Vielfache der Frame-Größe sein.');
+  if (!Number.isInteger(frameWidth) || frameWidth < 1 || !Number.isInteger(frameHeight) || frameHeight < 1 || sheet.width % frameWidth || sheet.height % frameHeight) throw new AppError('SHEET_SIZE', 'Image width and height must be multiples of the frame size.');
   const columns = sheet.width / frameWidth; const rows = sheet.height / frameHeight;
   const source = sheet.frames[0].cels[sheet.layers[0].id];
   const cells = Array.from({ length: columns * rows }, (_, cell) => {
@@ -206,7 +169,7 @@ export function sliceSheet(sheet: PixelDocument, frameWidth: number, frameHeight
   });
   let count = options.frameCount ?? cells.length;
   if (options.frameCount === undefined) while (count > 1 && cells[count - 1].every(index => index === 0)) count--;
-  if (!Number.isInteger(count) || count < 1 || count > cells.length || count > MAX_FRAMES) throw new AppError('SHEET_FRAMES', `Das Sheet ergibt ${count} Frames; erlaubt sind 1 bis ${Math.min(cells.length, MAX_FRAMES)}.`);
+  if (!Number.isInteger(count) || count < 1 || count > cells.length || count > MAX_FRAMES) throw new AppError('SHEET_FRAMES', `The sheet yields ${count} frames; 1 to ${Math.min(cells.length, MAX_FRAMES)} are allowed.`);
   const document = createDocument({
     width: frameWidth, height: frameHeight, palette: sheet.palette, maxColors: sheet.maxColors, paletteLocked: sheet.paletteLocked,
     layers: sheet.layers.map(({ id, name }) => ({ id, name })),
@@ -263,7 +226,7 @@ export function renderWrapPreview(document: PixelDocument, scale = 1, frameId?: 
 
 /** Tiles separated by a one-pixel gutter in a color outside the palette, to judge every tile on its own. */
 export function renderTileSheet(document: PixelDocument, scale = 1, frameId?: string): { png: Buffer; width: number; height: number; gutterColor: string } {
-  if (!document.tileset) throw new AppError('NO_TILESET', 'Dieses Asset hat kein Kachelraster.');
+  if (!document.tileset) throw new AppError('NO_TILESET', 'This asset has no tile grid.');
   const { tileWidth: tw, tileHeight: th } = document.tileset; const { columns, rows } = tileGrid(document.tileset, document.width, document.height);
   const width = columns * tw + columns - 1; const height = rows * th + rows - 1; const rgba = composite(document, frameId);
   const palette = document.palette.map(color => color.toUpperCase()); const gutterColor = GUTTER_CANDIDATES.find(color => !palette.includes(color)) ?? GUTTER_CANDIDATES[0];
@@ -278,8 +241,8 @@ export function renderTileSheet(document: PixelDocument, scale = 1, frameId?: st
 
 /** A sample map painted with the labeled tiles of one terrain; magenta cells mark combinations without a tile. */
 export function renderTerrainPreview(document: PixelDocument, terrain = 1, scale = 1, frameId?: string): { png: Buffer; width: number; height: number; map: TerrainMap } {
-  if (!document.tileset) throw new AppError('NO_TILESET', 'Dieses Asset hat kein Kachelraster.');
-  if (!Number.isInteger(terrain) || terrain < 1 || terrain > document.tileset.terrains.length) throw new AppError('UNKNOWN_TERRAIN', 'Dieses Terrain existiert nicht.');
+  if (!document.tileset) throw new AppError('NO_TILESET', 'This asset has no tile grid.');
+  if (!Number.isInteger(terrain) || terrain < 1 || terrain > document.tileset.terrains.length) throw new AppError('UNKNOWN_TERRAIN', 'This terrain does not exist.');
   const map = terrainMap(document.tileset, terrain);
   const image = renderTerrainMap(map, document.tileset, readIndices(document, undefined, frameId), document.palette, document.width);
   return { png: encode(image.width, image.height, image.rgba, scale), width: image.width * scale, height: image.height * scale, map };

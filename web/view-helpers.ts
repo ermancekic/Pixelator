@@ -15,6 +15,13 @@ export function fitCanvas(width: number, height: number, viewportWidth: number, 
   return { zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor((viewportWidth - 64) / width), Math.floor((viewportHeight - 64) / height))), pan: { x: 0, y: 0 } };
 }
 
+/** Scale that shows a whole image in a box: whole numbers when it grows, so pixels stay square; any fraction when it must shrink. */
+export function fitScale(width: number, height: number, boxWidth: number, boxHeight: number) {
+  if (width < 1 || height < 1 || boxWidth < 1 || boxHeight < 1) return 1;
+  const fit = Math.min(boxWidth / width, boxHeight / height);
+  return fit >= 1 ? Math.floor(fit) : Math.max(fit, 0.01);
+}
+
 export function panFromDrag(pan: Point, start: Point, end: Point): Point {
   return { x: pan.x + end.x - start.x, y: pan.y + end.y - start.y };
 }
@@ -44,7 +51,8 @@ export function createPanPreview(artboard: HTMLElement, initialPan: Point) {
 
 type ShortcutEvent = { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; isComposing?: boolean };
 type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start' | 'previous-frame' | 'next-frame' | 'play' | 'onion'
-  | 'select-all' | 'deselect' | 'copy' | 'copy-merged' | 'cut' | 'paste' | 'paste-layer' | 'swap-colors' | 'brush-smaller' | 'brush-larger' | 'commit';
+  | 'select-all' | 'deselect' | 'copy' | 'copy-merged' | 'cut' | 'paste' | 'paste-layer' | 'swap-colors' | 'brush-smaller' | 'brush-larger' | 'commit'
+  | 'settings' | 'toggle-library' | 'toggle-timeline';
 const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', s: 'shade', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', u: 'polygon', v: 'selection', q: 'lasso', w: 'wand', t: 'tile', m: 'move', h: 'pan' };
 export function resolveShortcut(event: ShortcutEvent, blocked = false): Shortcut | null {
   if (blocked || event.isComposing || event.altKey) return null;
@@ -53,6 +61,10 @@ export function resolveShortcut(event: ShortcutEvent, blocked = false): Shortcut
     if (key === 'z') return event.shiftKey ? 'redo' : 'undo';
     if (key === 'c') return event.shiftKey ? 'copy-merged' : 'copy';
     if (key === 'v') return event.shiftKey ? 'paste-layer' : 'paste';
+    // Ctrl+, Ctrl+B and Ctrl+J follow VS Code: settings, side bar and bottom panel.
+    if (key === ',') return 'settings';
+    if (key === 'b') return 'toggle-library';
+    if (key === 'j') return 'toggle-timeline';
     return key === 'y' ? 'redo' : key === 's' ? 'export' : key === 'a' ? 'select-all' : key === 'd' ? 'deselect' : key === 'x' ? 'cut' : null;
   }
   if (key === 'enter') return 'commit';
