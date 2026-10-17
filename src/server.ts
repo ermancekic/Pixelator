@@ -20,7 +20,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   const store = new Store(options.databasePath ?? join(dataDir, 'pixelator.sqlite'));
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 16 * 1024 * 1024 });
   const clients = new Set<import('node:http').ServerResponse>();
-  const mcpStatus: McpStatus = { running: true, endpoint: `http://127.0.0.1:${port}/mcp`, startedAt: new Date().toISOString(), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null, agents: { claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null } } };
+  const mcpStatus: McpStatus = { running: true, endpoint: `http://127.0.0.1:${port}/mcp`, startedAt: new Date().toISOString(), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null, agents: { claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null }, antigravity: { connected: false, sessions: 0, lastSeenAt: null } } };
   type McpSession = { mcp: ReturnType<typeof createMcpServer>; transport: NodeStreamableHTTPServerTransport; agent: McpAgent | null; lastSeen: number; activeRequests: number; streams: number; closing: boolean };
   const sessions = new Map<string, McpSession>();
   const broadcastMcpStatus = () => {
@@ -173,7 +173,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
       await current.transport.handleRequest(request.raw, reply.raw, request.body);
       if (method === 'initialize') {
         const name = current.mcp.server.getClientVersion()?.name.toLowerCase();
-        current.agent = name?.includes('claude') ? 'claude' : name?.includes('codex') ? 'codex' : null;
+        current.agent = name?.includes('antigravity') ? 'antigravity' : name?.includes('claude') ? 'claude' : name?.includes('codex') ? 'codex' : null;
       }
     } finally {
       if (post) { current.activeRequests--; mcpStatus.activeRequests--; }

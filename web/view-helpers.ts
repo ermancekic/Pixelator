@@ -19,6 +19,26 @@ export function panFromDrag(pan: Point, start: Point, end: Point): Point {
   return { x: pan.x + end.x - start.x, y: pan.y + end.y - start.y };
 }
 
+export const panTransform = (pan: Point) => `translate3d(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px), 0)`;
+
+export function createPanPreview(artboard: HTMLElement, initialPan: Point) {
+  let pan = initialPan;
+  let frame: number | null = null;
+  const render = () => { frame = null; artboard.style.transform = panTransform(pan); };
+  return {
+    move(next: Point) {
+      pan = next;
+      // Keep pointer-rate updates out of React and reuse the composited image.
+      if (frame === null) frame = window.requestAnimationFrame(render);
+    },
+    finish() {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      render();
+      return pan;
+    },
+  };
+}
+
 type ShortcutEvent = { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; isComposing?: boolean };
 type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start';
 const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', v: 'selection', m: 'move', h: 'pan' };

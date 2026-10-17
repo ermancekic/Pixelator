@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { fitCanvas, MAX_ZOOM, MIN_ZOOM, panFromDrag, resolveShortcut, zoomAt } from '../web/view-helpers.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createPanPreview, fitCanvas, MAX_ZOOM, MIN_ZOOM, panFromDrag, resolveShortcut, zoomAt } from '../web/view-helpers.js';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('canvas navigation', () => {
   it('keeps the world coordinate under the mouse fixed when zooming a panned view', () => {
@@ -29,6 +31,41 @@ describe('canvas navigation', () => {
     expect(panFromDrag(pan, start, { x: 15, y: -7 })).toEqual({ x: 119, y: -77 });
     expect(panFromDrag(pan, start, start)).toEqual(pan);
     expect(pan).toEqual({ x: 100, y: -50 });
+  });
+
+  it('coalesces pointer movements into one transform per frame without touching the canvas', () => {
+    let callback: FrameRequestCallback;
+    const requestAnimationFrame = vi.fn((next: FrameRequestCallback) => { callback = next; return 0; });
+    vi.stubGlobal('window', { requestAnimationFrame, cancelAnimationFrame: vi.fn() });
+    const transform = vi.fn();
+    const artboard = { style: { set transform(value: string) { transform(value); } } } as HTMLElement;
+    const preview = createPanPreview(artboard, { x: 100, y: -50 });
+    for (let x = 1; x <= 100; x++) preview.move({ x, y: -x });
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(transform).not.toHaveBeenCalled();
+    callback!(0);
+    expect(transform.mock.calls).toEqual([['translate3d(calc(-50% + 100px), calc(-50% + -100px), 0)']]);
+    preview.move({ x: 101, y: -101 });
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(2);
+    callback!(16);
+    expect(transform).toHaveBeenCalledTimes(2);
+  });
+
+  it('flushes the final pointer position and cancels pending work when a pan ends or is interrupted', () => {
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal('window', { requestAnimationFrame: vi.fn(() => 7), cancelAnimationFrame });
+    const artboard = { style: { transform: '' } } as HTMLElement;
+    const origin = { x: 30, y: -12 };
+    const preview = createPanPreview(artboard, origin);
+    expect(preview.finish()).toEqual(origin);
+    expect(cancelAnimationFrame).not.toHaveBeenCalled();
+    const next = { x: -90, y: 45 };
+    preview.move(next);
+    expect(preview.finish()).toEqual(next);
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
+    expect(artboard.style.transform).toBe('translate3d(calc(-50% + -90px), calc(-50% + 45px), 0)');
+    expect(zoomAt({ zoom: 4, pan: next }, 8).pan).toEqual({ x: -180, y: 90 });
+    expect(origin).toEqual({ x: 30, y: -12 });
   });
 });
 

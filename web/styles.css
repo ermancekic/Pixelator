@@ -25,6 +25,7 @@
 .canvas-hint{position:absolute;left:10px;right:10px;bottom:16px;margin:0;padding:5px 8px;pointer-events:none;z-index:3;background:#101619d9;border-radius:4px}
 .canvas-stage.pan-ready,.canvas-stage.pan-ready canvas{cursor:grab}
 .canvas-stage.is-panning,.canvas-stage.is-panning canvas{cursor:grabbing}
+.canvas-stage.is-panning .canvas-artboard{will-change:transform}
 .shortcuts-modal{width:620px}
 .shortcuts-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:20px}
 .shortcuts-heading h2{margin:0}

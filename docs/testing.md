@@ -27,7 +27,7 @@ Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm
 
 ## Echter MCP-Durchlauf
 
-Mit den tatsächlich verwendeten Codex-/Claude-Clients separat prüfen. Die App darf dabei weder ein Modell laden noch einen Agenten starten.
+Mit den tatsächlich verwendeten Codex-/Claude-/Antigravity-Clients separat prüfen. Die App darf dabei weder ein Modell laden noch einen Agenten starten.
 
 1. Service starten, Client per MCP verbinden und Pixel-Artist-Skill laden. Client-Version, Modell und Transport notieren.
 2. Ein 32×32-Skelett mit separater Schwertebene erstellen. `inspect_asset` muss ein echtes PNG als MCP-Bildinhalt liefern. Prüfen, dass der Agent dieses Bild tatsächlich visuell auswerten kann; ein Link oder JSON mit Bildmaßen reicht nicht.

@@ -67,7 +67,7 @@ it('rejects invalid envelopes, reconnects expired sessions, wraps HTTP failures 
   }
 }, 15000);
 
-it('shows a real stdio client as connected and removes its session when stdin closes', async () => {
+it.each([{ name: 'claude-code', agent: 'claude' }, { name: 'Antigravity', agent: 'antigravity' }] as const)('shows $name over stdio as connected and removes its session when stdin closes', async ({ name, agent }) => {
   const { app } = await createApp({ databasePath: ':memory:' });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const address = app.server.address();
@@ -76,12 +76,12 @@ it('shows a real stdio client as connected and removes its session when stdin cl
   const lines = createInterface({ input: child.stdout });
   try {
     const initialized = once(lines, 'line', { signal: AbortSignal.timeout(5000) });
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'claude-code', version: '1' } } }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name, version: '1' } } }) + '\n');
     expect(JSON.parse((await initialized)[0]).result.serverInfo.name).toBe('pixelator');
-    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.claude).toMatchObject({ connected: true, sessions: 1 });
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents[agent]).toMatchObject({ connected: true, sessions: 1 });
     const closed = once(child, 'close', { signal: AbortSignal.timeout(5000) });
     child.stdin.end();
     expect((await closed)[0]).toBe(0);
-    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.claude).toMatchObject({ connected: false, sessions: 0 });
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents[agent]).toMatchObject({ connected: false, sessions: 0 });
   } finally { lines.close(); child.kill(); await app.close(); }
 }, 15000);
