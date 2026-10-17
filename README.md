@@ -1,3 +1,5 @@
+![Pixelator – dein Pixel-Art-Studio](docs/assets/readme-header.png)
+
 # Pixelator
 
 Lokaler Pixel-Art-Editor mit MCP für Codex, Claude und Antigravity. Benötigt Node.js **ab 24.13**.
@@ -53,3 +55,5 @@ claude mcp add --transport http pixelator http://127.0.0.1:4317/mcp --scope user
 Danach die MCP-Verbindung im Client neu laden. [Weitere Details](docs/mcp.md) · [Tests](docs/testing.md)
 
 Daten liegen in `data/`. Für Backups die App beenden und den Ordner sichern.
+
+![Kleine Pixel. Große Ideen. Mit Pixelator gezeichnet.](docs/assets/readme-footer.png)
