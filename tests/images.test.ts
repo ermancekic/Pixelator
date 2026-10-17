@@ -3,6 +3,7 @@ import { PNG } from 'pngjs';
 import { composite, createDocument } from '../src/engine.js';
 import { importPng, renderPng, renderThumbnail, unityManifest } from '../src/images.js';
 import { Store } from '../src/store.js';
+import { cel, setCel } from './helpers.js';
 
 const palette = ['#00000000', '#FF0000', '#0000FF', '#FFFFFF'];
 const pngBase64 = (width: number, height: number, pixels: number[][]) => {
@@ -16,10 +17,10 @@ describe('lossless PNG input', () => {
     const rgba = [[255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 0, 0], [255, 0, 0, 255]];
     const doc = importPng(`data:image/png;base64,${pngBase64(2, 2, rgba)}`, 2, true);
     expect(doc).toMatchObject({ width: 2, height: 2, maxColors: 2, paletteLocked: true, palette: ['#00000000', '#FF0000', '#0000FF'] });
-    expect(doc.layers[0].pixels).toEqual([1, 2, 0, 1]);
+    expect(cel(doc)).toEqual([1, 2, 0, 1]);
     const exported = PNG.sync.read(renderPng(doc));
     expect([...exported.data]).toEqual(rgba.flat());
-    expect(importPng(renderPng(doc).toString('base64'), 2).layers[0].pixels).toEqual([1, 2, 0, 1]);
+    expect(cel(importPng(renderPng(doc).toString('base64'), 2))).toEqual([1, 2, 0, 1]);
   });
 
   it('rejects partial alpha instead of silently thresholding it', () => {
@@ -79,8 +80,8 @@ describe('lossless PNG input', () => {
 describe('rendering and Unity coordinates', () => {
   it('renders bounded nearest-neighbor thumbnails with aspect ratio and compositing preserved', () => {
     const doc = createDocument({ width: 4, height: 2, palette, layers: [{ id: 'base', name: 'Base' }, { id: 'top', name: 'Top' }] });
-    doc.layers[0].pixels = [1, 0, 2, 3, 0, 1, 3, 2];
-    doc.layers[1].pixels = [0, 0, 1, 0, 0, 0, 0, 0];
+    setCel(doc, 0, [1, 0, 2, 3, 0, 1, 3, 2]);
+    setCel(doc, 1, [0, 0, 1, 0, 0, 0, 0, 0]);
     const thumbnail = PNG.sync.read(renderThumbnail(doc, 2));
     expect([thumbnail.width, thumbnail.height]).toEqual([2, 1]);
     expect([...thumbnail.data]).toEqual([255, 0, 0, 255, 255, 0, 0, 255]);
@@ -99,9 +100,9 @@ describe('rendering and Unity coordinates', () => {
 
   it('renders exact nearest-neighbor blocks, with compositing and transparent edges preserved', () => {
     const doc = createDocument({ width: 3, height: 2, palette, layers: [{ id: 'body', name: 'Body' }, { id: 'weapon', name: 'Weapon' }, { id: 'hidden', name: 'Hidden' }] });
-    doc.layers[0].pixels = [1, 0, 2, 0, 1, 0];
-    doc.layers[1].pixels = [0, 2, 0, 0, 0, 0];
-    doc.layers[2].pixels = [3, 3, 3, 3, 3, 3];
+    setCel(doc, 0, [1, 0, 2, 0, 1, 0]);
+    setCel(doc, 1, [0, 2, 0, 0, 0, 0]);
+    setCel(doc, 2, [3, 3, 3, 3, 3, 3]);
     doc.layers[2].visible = false;
     const sourceColors = [[255, 0, 0, 255], [0, 0, 255, 255], [0, 0, 255, 255], [0, 0, 0, 0], [255, 0, 0, 255], [0, 0, 0, 0]];
     expect([...PNG.sync.read(renderPng(doc)).data]).toEqual(sourceColors.flat());
@@ -124,7 +125,7 @@ describe('rendering and Unity coordinates', () => {
 
   it('renders native and enlarged PNGs beyond 1024 pixels', () => {
     const doc = createDocument({ width: 1025, height: 3, palette });
-    doc.layers[0].pixels[1024] = 1;
+    cel(doc)[1024] = 1;
     for (const scale of [1, 2]) {
       const png = PNG.sync.read(renderPng(doc, scale));
       expect([png.width, png.height]).toEqual([1025 * scale, 3 * scale]);

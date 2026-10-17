@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import * as schema from './contracts.js';
-import { applyOperations, createDocument, STYLE_PRESETS, validateDocument } from './engine.js';
+import { applyOperations, createDocument, STYLE_PRESETS, upgradeDocument, validateDocument } from './engine.js';
 import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDocument, Project, Revision, RevisionSummary } from './types.js';
 
 export class AppError extends Error {
@@ -18,6 +18,13 @@ function stable(value: unknown): unknown {
   return value;
 }
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
+// Revisions written before animation support are lifted on read; the database itself is never rewritten.
+const upgradeRevision = (revision: Revision): Revision => ({ ...revision, document: upgradeDocument(revision.document) });
+const upgradeStored = <T>(value: T): T => {
+  const revision = (value as { revision?: Revision } | null)?.revision;
+  return revision?.document ? { ...value, revision: upgradeRevision(revision) } : value;
+};
+const isBlank = (doc: PixelDocument) => doc.frames.every(frame => Object.values(frame.cels).every(pixels => pixels.every(index => index === 0)));
 
 export class Store extends EventEmitter {
   readonly db: DatabaseSync;
@@ -128,11 +135,11 @@ export class Store extends EventEmitter {
     const id = revisionId ?? this.read<Asset>('assets', assetId).headRevisionId;
     const revision = this.read<Revision>('revisions', id);
     if (revision.assetId !== assetId) throw new AppError('WRONG_ASSET', 'Die Revision gehört zu einem anderen Asset.');
-    return revision;
+    return upgradeRevision(revision);
   }
   listRevisions(assetId: string): Revision[] {
     this.getAsset(assetId);
-    return (this.db.prepare('SELECT data FROM revisions WHERE asset_id=? ORDER BY rowid DESC').all(assetId) as { data: string }[]).map(row => JSON.parse(row.data));
+    return (this.db.prepare('SELECT data FROM revisions WHERE asset_id=? ORDER BY rowid DESC').all(assetId) as { data: string }[]).map(row => upgradeRevision(JSON.parse(row.data)));
   }
   listRevisionSummaries(assetId: string): RevisionSummary[] {
     this.read<Asset>('assets', assetId);
@@ -150,6 +157,7 @@ export class Store extends EventEmitter {
       width, height, palette: input.palette ?? project.style.palette,
       maxColors: input.maxColors ?? project.style.maxColors, paletteLocked: project.style.paletteLocked,
       layers: input.layers ?? [{ id: 'body', name: input.type === 'character' ? 'Körper' : 'Basis' }],
+      frames: input.frames, tags: input.animationTags,
       pivot: { x: width / 2, y: input.type === 'character' ? height : height / 2 },
     });
     const validation = validateDocument(doc);
@@ -181,8 +189,9 @@ export class Store extends EventEmitter {
   importDocument(input: CreateAssetInput, doc: PixelDocument): AssetDetail {
     const parsed = schema.createAssetInput.parse(input);
     schema.documentSchema.parse(doc);
+    doc = upgradeDocument(doc);
     const project = this.getProject(parsed.projectId);
-    if (project.style.paletteLocked && validateDocument(doc).valid && doc.layers.every(layer => layer.pixels.every(index => index === 0))) {
+    if (project.style.paletteLocked && validateDocument(doc).valid && isBlank(doc)) {
       doc = { ...doc, palette: [...project.style.palette], maxColors: project.style.maxColors, paletteLocked: true };
     }
     if (doc.maxColors > project.style.maxColors || doc.palette.slice(1).some(c => project.style.paletteLocked && !project.style.palette.map(p => p.toUpperCase()).includes(c.toUpperCase()))) throw new AppError('PALETTE_LIMIT', 'Das Bild passt nicht zu den Farbregeln des Projekts.');
@@ -206,7 +215,7 @@ export class Store extends EventEmitter {
     const row = this.db.prepare('SELECT hash,data FROM requests WHERE id=?').get(`${assetId}:${requestId}`) as { hash: string; data: string } | undefined;
     if (!row) return undefined;
     if (row.hash !== hash(payload)) throw new AppError('IDEMPOTENCY_CONFLICT', 'Diese requestId wurde bereits mit anderem Inhalt verwendet.', 409);
-    return JSON.parse(row.data) as T;
+    return upgradeStored(JSON.parse(row.data) as T);
   }
   private saveRequest(assetId: string, requestId: string, payload: unknown, result: unknown) {
     this.db.prepare('INSERT INTO requests(id,hash,data) VALUES(?,?,?)').run(`${assetId}:${requestId}`, hash(payload), JSON.stringify(result));
@@ -329,14 +338,15 @@ export class Store extends EventEmitter {
   }
   exportProject(id: string) {
     const assets = this.listAssets(id);
-    return { kind: 'pixelator-project' as const, schemaVersion: 1 as const, project: this.getProject(id), assets, revisions: assets.flatMap(asset => this.listRevisions(asset.id)), runs: this.listRuns().filter(run => run.projectId === id) };
+    return { kind: 'pixelator-project' as const, schemaVersion: 2 as const, project: this.getProject(id), assets, revisions: assets.flatMap(asset => this.listRevisions(asset.id)), runs: this.listRuns().filter(run => run.projectId === id) };
   }
   exportAsset(assetId: string) {
     const { asset } = this.getAsset(assetId);
-    return { kind: 'pixelator-project' as const, schemaVersion: 1 as const, project: this.getProject(asset.projectId), assets: [asset], revisions: this.listRevisions(assetId), runs: this.listRuns().filter(run => run.assetId === assetId) };
+    return { kind: 'pixelator-project' as const, schemaVersion: 2 as const, project: this.getProject(asset.projectId), assets: [asset], revisions: this.listRevisions(assetId), runs: this.listRuns().filter(run => run.assetId === assetId) };
   }
   importProject(input: unknown): Project {
-    const bundle = schema.projectBundle.parse(input);
+    const parsed = schema.projectBundle.parse(input);
+    const bundle = { ...parsed, revisions: parsed.revisions.map(revision => ({ ...revision, document: upgradeDocument(revision.document) })) };
     const assetIds = new Set(bundle.assets.map(asset => asset.id));
     const revisionIds = new Set(bundle.revisions.map(revision => revision.id));
     const runs = bundle.runs ?? [];

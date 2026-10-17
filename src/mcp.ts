@@ -25,14 +25,15 @@ export function publicError(error: unknown) {
   return { code: 'INTERNAL_ERROR', message: 'Ein interner Fehler ist aufgetreten. Details stehen im Serverprotokoll.', status: 500 };
 }
 export function revisionSummary(revision: Revision, includePixels = false) {
-  const { document } = revision;
+  const { document } = revision; const { frames, layers, ...rest } = document;
   return {
     id: revision.id, parentId: revision.parentId, label: revision.label, actor: revision.actor, runId: revision.runId, createdAt: revision.createdAt,
     validation: revision.validation,
-    document: { ...document, layers: document.layers.map(layer => includePixels ? layer : {
-      id: layer.id, name: layer.name, visible: layer.visible, locked: layer.locked,
-      opaquePixels: layer.pixels.filter(Boolean).length,
-    }) },
+    document: includePixels ? document : {
+      ...rest,
+      layers: layers.map(layer => ({ ...layer, opaquePixels: frames.reduce((count, frame) => count + frame.cels[layer.id].filter(Boolean).length, 0) })),
+      frames: frames.map(({ id, durationMs }) => ({ id, durationMs })),
+    },
   };
 }
 const detailSummary = (detail: AssetDetail, includePixels = false) => ({ asset: detail.asset, revision: revisionSummary(detail.revision, includePixels) });
@@ -42,6 +43,8 @@ export const compactApplyResult = ({ asset, revision, diff }: ApplyResult) => ({
   assetId: asset.id, revisionId: revision.id, parentId: revision.parentId, label: revision.label, diff,
   validation: compactValidation(revision.validation),
   layers: revision.document.layers.map(({ id, visible, locked }) => ({ id, visible, locked })),
+  frames: revision.document.frames.map(({ id, durationMs }) => ({ id, durationMs })),
+  tags: revision.document.tags,
 });
 const MAX_INSPECT_PIXELS = 4096 * 4096;
 const jsonResult = (value: unknown) => {
@@ -77,12 +80,13 @@ export function createMcpServer(store: Store, exportDir: string, baseUrl: string
     const result = store.apply(assetId, { ...request, actor: 'agent' });
     return response === 'full' ? { ...detailSummary(result), diff: result.diff } : compactApplyResult(result);
   });
-  tool('read_pixels', `Read exact palette indices of a region as compact rows, the same encoding the rows operation writes. Omit layerId for the visible composite. Use before precise local edits instead of get_asset includePixels. At most ${MAX_READ_CELLS} cells per call.`, assetIdInput.extend({ revisionId: identifier.optional(), layerId: identifier.optional(), rect: schema.rect.optional() }), input => {
+  tool('read_pixels', `Read exact palette indices of a region as compact rows, the same encoding the rows operation writes. Omit layerId for the visible composite and frameId for the first frame. Use before precise local edits instead of get_asset includePixels. At most ${MAX_READ_CELLS} cells per call.`, assetIdInput.extend({ revisionId: identifier.optional(), frameId: identifier.optional(), layerId: identifier.optional(), rect: schema.rect.optional() }), input => {
     const revision = store.getRevision(input.assetId, input.revisionId); const { document } = revision;
     const area = input.rect ?? { x: 0, y: 0, width: document.width, height: document.height };
     if (area.x + area.width > document.width || area.y + area.height > document.height) throw new AppError('INVALID_RECT', 'Der Bereich muss innerhalb der Leinwand liegen.');
     if (area.width * area.height > MAX_READ_CELLS) throw new AppError('REGION_TOO_LARGE', `Höchstens ${MAX_READ_CELLS} Zellen pro Aufruf. Einen kleineren rect wählen.`);
-    return { assetId: input.assetId, revisionId: revision.id, source: input.layerId ?? 'composite', ...area, legend: rowLegend(document.palette), rows: encodeRows(readIndices(document, input.layerId), document.width, area) };
+    const frameId = input.frameId ?? document.frames[0].id;
+    return { assetId: input.assetId, revisionId: revision.id, frameId, source: input.layerId ?? 'composite', ...area, legend: rowLegend(document.palette), rows: encodeRows(readIndices(document, input.layerId, frameId), document.width, area) };
   }, true);
   const inspectInput = assetIdInput.extend({ revisionId: identifier.optional(), runId: identifier.optional(), scale: z.number().int().min(1).max(32).optional(), scales: z.array(z.number().int().min(1).max(32)).min(1).max(3).optional() });
   server.registerTool('inspect_asset', {

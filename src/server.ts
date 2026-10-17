@@ -98,9 +98,9 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     const body = z.object({ name: z.string().trim().min(1).max(160) }).strict().parse(request.body);
     return store.createVariant(request.params.id, body.name);
   });
-  app.get<{ Params: { id: string }; Querystring: { scale?: string; revisionId?: string } }>('/api/assets/:id/png', (request, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { scale?: string; revisionId?: string; frameId?: string } }>('/api/assets/:id/png', (request, reply) => {
     const revision = store.getRevision(request.params.id, request.query.revisionId);
-    return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderPng(revision.document, request.query.scale ? Number(request.query.scale) : 1));
+    return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderPng(revision.document, request.query.scale ? Number(request.query.scale) : 1, request.query.frameId));
   });
   app.get<{ Params: { id: string }; Querystring: { revisionId?: string } }>('/api/assets/:id/thumbnail', (request, reply) => {
     const { revisionId } = z.object({ revisionId: z.string().min(1).max(100).optional() }).strict().parse(request.query);

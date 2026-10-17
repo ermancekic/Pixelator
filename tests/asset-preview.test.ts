@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDocument } from '../src/engine.js';
 import { paint } from '../web/AssetPreview.js';
+import { cel } from './helpers.js';
 
 function canvas() {
   const context = {
@@ -14,7 +15,7 @@ function canvas() {
 describe('asset preview rendering', () => {
   it('shares one composited buffer across the editor and nine preview tiles', () => {
     const doc = createDocument({ width: 2, height: 1, palette: ['#00000000', '#ff0000'] });
-    doc.layers[0].pixels[0] = 1;
+    cel(doc)[0] = 1;
     const canvases = Array.from({ length: 10 }, canvas);
     for (const entry of canvases) paint(entry.element, doc);
     const image = canvases[0].context.putImageData.mock.calls[0][0];
@@ -29,19 +30,19 @@ describe('asset preview rendering', () => {
   it('renders hidden layers individually and refreshes buffers when the document changes', () => {
     const doc = createDocument({ width: 1, height: 1, palette: ['#00000000', '#ff0000', '#0000ff'] });
     doc.layers[0].visible = false;
-    doc.layers[0].pixels[0] = 1;
+    cel(doc)[0] = 1;
     const entry = canvas();
     paint(entry.element, doc);
-    paint(entry.element, doc, doc.layers[0]);
-    paint(entry.element, doc, doc.layers[0]);
+    paint(entry.element, doc, { layerId: doc.layers[0].id });
+    paint(entry.element, doc, { layerId: doc.layers[0].id });
     expect([...entry.context.putImageData.mock.calls[0][0].data]).toEqual([0, 0, 0, 0]);
     expect([...entry.context.putImageData.mock.calls[1][0].data]).toEqual([255, 0, 0, 255]);
     expect(entry.context.createImageData).toHaveBeenCalledTimes(2);
     expect(doc.layers[0].visible).toBe(false);
 
     const next = structuredClone(doc);
-    next.layers[0].pixels[0] = 2;
-    paint(entry.element, next, next.layers[0]);
+    cel(next)[0] = 2;
+    paint(entry.element, next, { layerId: next.layers[0].id });
     expect([...entry.context.putImageData.mock.calls[3][0].data]).toEqual([0, 0, 255, 255]);
     expect(entry.context.createImageData).toHaveBeenCalledTimes(3);
   });
@@ -49,10 +50,10 @@ describe('asset preview rendering', () => {
   it('bounds large layer thumbnails and samples nearest pixels without changing the native preview', () => {
     const doc = createDocument({ width: 2048, height: 1024, palette: ['#00000000', '#ff0000', '#0000ff'] });
     const layer = doc.layers[0]; layer.visible = false;
-    layer.pixels[21 * doc.width + 21] = 1;
-    layer.pixels[1002 * doc.width + 2026] = 2;
+    cel(doc)[21 * doc.width + 21] = 1;
+    cel(doc)[1002 * doc.width + 2026] = 2;
     const thumbnail = canvas();
-    paint(thumbnail.element, doc, layer);
+    paint(thumbnail.element, doc, { layerId: layer.id });
     expect([thumbnail.element.width, thumbnail.element.height]).toEqual([48, 24]);
     expect(thumbnail.context.createImageData).toHaveBeenCalledWith(48, 24);
     const data = thumbnail.context.putImageData.mock.calls[0][0].data;
