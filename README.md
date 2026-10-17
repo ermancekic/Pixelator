@@ -64,4 +64,4 @@ Danach die MCP-Verbindung im Client neu laden. [Weitere Details](docs/mcp.md) ·
 
 Daten liegen in `data/`. Für Backups die App beenden und den Ordner sichern.
 
-![Kleine Pixel. Große Ideen. Mit Pixelator gezeichnet.](docs/assets/readme-footer.png)
+![Pixelator Panorama](docs/assets/readme-footer.png)
