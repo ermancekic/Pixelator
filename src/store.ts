@@ -5,7 +5,7 @@ import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import * as schema from './contracts.js';
 import { applyOperations, createDocument, STYLE_PRESETS, upgradeDocument, validateDocument } from './engine.js';
-import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDiff, PixelDocument, Project, Revision, RevisionSummary } from './types.js';
+import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDiff, PixelDocument, Project, ProjectOverview, Revision, RevisionSummary } from './types.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -76,6 +76,14 @@ export class Store extends EventEmitter {
   private changed(type: string, projectId: string, assetId?: string) { this.emit('change', { type, projectId, assetId }); }
   listProjects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data)); }
   getProject(id: string): Project { return this.read('projects', id); }
+  /** Every project with its asset count, latest change and up to four most recently changed assets, in one query. */
+  projectOverview(previews = 4): ProjectOverview[] {
+    const rows = this.db.prepare("SELECT project_id AS projectId, json_extract(data,'$.id') AS id, json_extract(data,'$.name') AS name, json_extract(data,'$.headRevisionId') AS headRevisionId, json_extract(data,'$.updatedAt') AS updatedAt FROM assets ORDER BY updatedAt DESC, rowid DESC").all() as { projectId: string; id: string; name: string; headRevisionId: string; updatedAt: string }[];
+    return this.listProjects().map(project => {
+      const assets = rows.filter(row => row.projectId === project.id);
+      return { ...project, assetCount: assets.length, updatedAt: assets[0]?.updatedAt ?? project.createdAt, previews: assets.slice(0, previews).map(({ id, name, headRevisionId }) => ({ id, name, headRevisionId })) };
+    });
+  }
   createProject(input: unknown): Project {
     const parsed = schema.projectInput.parse(input);
     const project: Project = { id: newId('project'), name: parsed.name, style: structuredClone(STYLE_PRESETS[parsed.preset ?? '16-bit']), createdAt: now() };

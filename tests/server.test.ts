@@ -848,3 +848,21 @@ describe('tilesets over REST and MCP', () => {
     expect((await app.inject(`/api/assets/${plain.asset.id}/export?format=tsj`)).json()).toMatchObject({ error: { code: 'NO_TILESET' } });
   });
 });
+
+describe('project overview', () => {
+  it('lists every project with asset count, latest change and the most recently changed assets', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const empty = (await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Leer' } })).json<Project>();
+    const names = ['Schwert', 'Schild', 'Trank', 'Schlüssel'];
+    for (const name of names) expect((await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name, type: 'item', width: 4, height: 4 } })).statusCode).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const painted = (await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) })).json<ApplyResult>();
+    const overview = await app.inject('/api/projects/overview');
+    expect(overview.headers['cache-control']).toBe('no-store');
+    const [first, second] = overview.json<Array<Project & { assetCount: number; updatedAt: string; previews: { id: string; name: string; headRevisionId: string }[] }>>();
+    expect(first).toMatchObject({ id: project.id, name: 'Game assets', assetCount: 5, updatedAt: painted.asset.updatedAt, style: { preset: 'game-boy' } });
+    expect(first.previews).toHaveLength(4);
+    expect(first.previews[0]).toEqual({ id: detail.asset.id, name: 'Knight', headRevisionId: painted.revision.id });
+    expect(second).toMatchObject({ id: empty.id, assetCount: 0, updatedAt: empty.createdAt, previews: [] });
+  });
+});

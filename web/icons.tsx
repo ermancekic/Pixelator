@@ -43,6 +43,7 @@ const paths: Record<string, ReactNode> = {
   flatten: <><path d="m12 3 9 5-9 5-9-5Z"/><path d="M3 17h18M3 21h18"/></>,
   crop: <><path d="M6 2v16h16"/><path d="M2 6h16v16"/></>,
   image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></>,
+  selector: <path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>,
   tile: <><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1" fill="currentColor"/></>,
   paste: <><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M9 11h6M9 15h4"/></>,
 };

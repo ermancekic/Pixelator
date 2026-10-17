@@ -42,6 +42,7 @@ Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm
 | Autotiles | Blob 47, Kanten 16 und Ecken 15 entstehen aus den Schlüsselkacheln, sind gelabelt und vollständig; ungerade Kachelgrößen und zu kleine Raster werden mit Größenangabe abgelehnt. Fehlende Kombinationen erzeugen `TERRAIN_INCOMPLETE` und Magenta-Zellen in der Testkarte. |
 | Nahtlos und Versatz | Striche und Formen laufen auf wrappenden Achsen über den Rand; `shift` versetzt mit Umlauf, nur im Rechteck. Geisterkacheln verändern keine Daten. |
 | Tileset-Export | PNG mit Extrude/Abstand; animierte Kacheln als Zeilenblöcke; Tiled TSX/TSJ mit Klasse, Name, Kollision, Animation und Wang-Set; Godot `.tres` mit Terrain-Modus, Peering-Bits, Physik, Custom Data und Animation; Unity-Manifest. Godot lädt das TileSet, und sein Terrain-Pinsel wählt dieselben Kacheln wie die Testkarte; ein Tiled-Parser liest TSX und TSJ gleich. |
+| Projektübersicht | `GET /api/projects/overview` liefert pro Projekt Assetzahl, letzte Änderung und bis zu vier zuletzt geänderte Assets. Das Fenster sortiert nach Aktivität, markiert das geöffnete Projekt, sucht, wechselt per Klick, Pfeiltasten und `Enter`, schließt mit `Esc` und bleibt mobil ohne horizontales Scrollen. |
 | Vorschau und Kacheln | 1×/2×/4×/8× zeigen feste Pixelmaße ohne automatisches Schrumpfen; große Bilder scrollen. Hintergrundwechsel und 3×3-Wiederholung verändern keine Dokumentdaten. Laufender Strich und historische Revision werden korrekt dargestellt. |
 
 ## Echter MCP-Durchlauf
