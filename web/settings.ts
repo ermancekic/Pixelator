@@ -19,7 +19,10 @@ export function saveSettings(settings: Settings) {
   try { window.localStorage.setItem(KEY, JSON.stringify(settings)); } catch { /* Preferences then last for this session. */ }
 }
 
-/** Forgets saved panel sizes so every panel returns to its default size. */
+export const PANELS_RESET = 'pixelator:panels-reset';
+
+/** Returns every panel to its default size, including panels that are hidden right now. */
 export function resetPanelSizes() {
   try { for (const key of Object.keys(window.localStorage)) if (key.startsWith('pixelator.panel.')) window.localStorage.removeItem(key); } catch { /* Nothing stored. */ }
+  window.dispatchEvent(new Event(PANELS_RESET));
 }
