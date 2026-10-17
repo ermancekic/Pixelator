@@ -2,6 +2,25 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
+## Ergänzung: Exportfenster, Menüleiste und Sprache
+
+Am 17. Oktober 2026 bestanden **229 Tests in 16 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Jeder Oberflächentext aus `t()`/`msg()` hat eine englische Übersetzung mit denselben Platzhaltern, ohne verwaiste Einträge; statische und dynamische Servermeldungen werden für die deutsche Oberfläche übersetzt; Einstellungen aus dem Browser-Speicher werden geprüft; Einpassen-Zoom und die Kürzel `Strg+,`, `Strg+B`, `Strg+J`. Servermeldungen sind jetzt englisch, auch für MCP-Clients.
+
+**Browser** (Chromium über Playwright, eigener Datenordner) mit 21 Prüfungen, dreimal in Folge bestanden:
+- Englische Menüleiste und `lang="en"` beim ersten Start; Menüs per Maus und Tastatur.
+- Kein deutscher Text in der englischen Oberfläche: Editor, alle Werkzeuge, Menüs, Exportformate, Kachelbereich und alle Dialoge.
+- Animationsleiste, Eigenschaften und Bibliothek aus- und einblenden (Menü, `Strg+J`, `Strg+B`), auch nach Neuladen.
+- Export: PNG mit Größe und Frame; Download mit Dateinamen schließt das Fenster; Einstellungen bleiben erhalten; Sheet-Vorschau und Tileset-Vorschau (Extrude 1, Abstand 2) pixelgleich zur Datei; `.tsx`-Vorschau gleich dem Download; Sheet mit JSON lädt beide Dateien; unpassende Formate gesperrt.
+- Die Vorschau passt ein 512×384-Bild bei 29 % ein; 1× zeigt 512 px.
+- Umschalten auf Deutsch übersetzt Menüs, den Verlaufseintrag „Asset angelegt“ und die Servermeldung „Eine gültige PNG-Datei ist erforderlich.“ und bleibt nach Neuladen.
+- Keine Seiten- oder Konsolenfehler.
+
+Die bisherigen Browserläufe (Editor-Grundfunktionen 22, Tiles 13, Projektübersicht 14 Prüfungen) bestehen weiterhin, jetzt in der deutschen Oberfläche und mit Export über das Fenster. Bei 1024, 820 und 390 px Breite gibt es kein horizontales Scrollen; unter 900 px ist die Menüleiste ausgeblendet.
+
+**README-Banner:** Kopfbanner mit englischem Text, als GIF animiert (Glanz über dem Logo, blinkender Cursor, funkelnde Sterne); Fußbanner animiert (Wasser, schwebende Münzen, Portal, Funken, Sterne, blinzelnder Schleim). Beide GIFs übernehmen die Farben der Vorlagen verlustfrei.
+
+**Nicht geprüft:** Firefox und Safari, insbesondere mehrere Downloads aus einem Klick; Screenreader-Ausgabe der Menüs. Meldungen der Raster-Engine bleiben in der deutschen Oberfläche englisch.
+
 ## Ergänzung: Projektübersicht
 
 Die Projektauswahl ist ein Fenster mit Projektkarten statt einer Auswahlliste. Ein Servertest prüft die Übersicht (Assetzahl, letzte Änderung, Reihenfolge und Revision der Vorschau-Assets, leeres Projekt).
