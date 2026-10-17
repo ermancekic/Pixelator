@@ -2,6 +2,10 @@
 
 Kurzreferenz der Bearbeitungsfunktionen. Alle Kürzel zeigt der Editor unter `?`. Tilesets, Autotiles und nahtloses Zeichnen beschreibt [Tiles](tiles.md).
 
+## Projekte
+
+Der Projektknopf oben in der Bibliothek öffnet die Projektübersicht. Sie zeigt alle Projekte als Karten mit den zuletzt geänderten Assets, dem Stilprofil, der Palette, der Assetzahl und der letzten Änderung, sortiert nach Aktivität. Tippen sucht, Pfeiltasten wechseln die Karte, `Enter` öffnet. Neue Projekte und Projektimporte starten ebenfalls hier.
+
 ## Zeichnen
 
 - **Pinsel:** Stift, Radierer und Schattieren nutzen 1–16 px, quadratisch oder rund (`<`/`>` oder `[`/`]`). Pixel-Perfect gilt nur bei 1 px.

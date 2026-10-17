@@ -2,6 +2,17 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
+## Ergänzung: Projektübersicht
+
+Die Projektauswahl ist ein Fenster mit Projektkarten statt einer Auswahlliste. Ein Servertest prüft die Übersicht (Assetzahl, letzte Änderung, Reihenfolge und Revision der Vorschau-Assets, leeres Projekt).
+
+**Browser** (Chromium, eigener Datenordner, vier Projekte mit gezeichneten Assets) mit 14 Prüfungen:
+- Sortierung nach Aktivität, vier Vorschaubilder, Markierung „Geöffnet“ sowie Stil, Assetzahl und Änderungszeit.
+- Suche mit `Enter`, Wechsel per Pfeiltasten und `Enter`, Hinweis bei leerem Ergebnis, `Esc`.
+- „Neues Projekt“ aus dem Fenster und die Darstellung ohne Assets.
+- Mobile Breite ohne horizontales Scrollen.
+- Keine Seiten- oder Konsolenfehler.
+
 ## Ergänzung: Tiles
 
 Am 17. Oktober 2026 bestanden **218 Tests in 15 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Kachelraster und Metadaten-Validierung, `tileset`/`tile_properties`/`remove_tileset`, Remap bei `resize_canvas`, `shift`, Autotile-Komposition (47/16/15 Kombinationen, Viertel- und Halbversatz-Regeln), Terrain-Zuordnung mit Wahrscheinlichkeit, Testkarten-Render, Tileset-Layout mit Extrude, Tiled-/Godot-/Unity-Export, REST- und MCP-Durchlauf sowie nahtloses Zeichnen.

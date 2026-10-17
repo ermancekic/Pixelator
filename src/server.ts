@@ -78,6 +78,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   });
   app.get('/api/presets', () => STYLE_PRESETS);
   app.get('/api/projects', () => store.listProjects());
+  app.get('/api/projects/overview', (_request, reply) => reply.header('Cache-Control', 'no-store').send(store.projectOverview()));
   app.post('/api/projects', request => store.createProject(request.body));
   app.patch<{ Params: { id: string } }>('/api/projects/:id', request => store.updateProject(request.params.id, request.body));
   app.delete<{ Params: { id: string } }>('/api/projects/:id', request => store.deleteProject(request.params.id));

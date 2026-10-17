@@ -51,6 +51,8 @@ export interface ProjectStyle {
   theme: string;
 }
 export interface Project { id: string; name: string; style: ProjectStyle; createdAt: string }
+/** A project with what its overview card shows: asset count, last change and the most recently changed assets. */
+export interface ProjectOverview extends Project { assetCount: number; updatedAt: string; previews: { id: string; name: string; headRevisionId: string }[] }
 export interface Asset {
   id: string;
   projectId: string;
