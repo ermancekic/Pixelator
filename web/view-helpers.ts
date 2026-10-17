@@ -40,7 +40,7 @@ export function createPanPreview(artboard: HTMLElement, initialPan: Point) {
 }
 
 type ShortcutEvent = { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; isComposing?: boolean };
-type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start';
+type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start' | 'previous-frame' | 'next-frame' | 'play' | 'onion';
 const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', v: 'selection', m: 'move', h: 'pan' };
 export function resolveShortcut(event: ShortcutEvent, blocked = false): Shortcut | null {
   if (blocked || event.isComposing || event.altKey) return null;
@@ -58,5 +58,9 @@ export function resolveShortcut(event: ShortcutEvent, blocked = false): Shortcut
   if (key === '0' || key === 'f') return 'fit';
   if (key === '1') return 'actual-size';
   if (key === 'g' && event.shiftKey) return 'grid';
+  if (key === 'o' && event.shiftKey) return 'onion';
+  if (key === ',') return 'previous-frame';
+  if (key === '.') return 'next-frame';
+  if (key === 'k') return 'play';
   return toolKeys[key] ?? null;
 }
