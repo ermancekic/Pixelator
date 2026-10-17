@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ROW_PATTERN } from './raster-text.js';
 
 const coordinate = z.number().int().min(0);
 const size = z.number().int().min(1);
@@ -28,6 +29,7 @@ const layerId = id;
 export const operation = z.discriminatedUnion('op', [
   z.object({ op: z.literal('pixels'), layerId, points: z.array(z.tuple([coordinate, coordinate, color])).min(1) }).strict(),
   z.object({ op: z.literal('patch'), layerId, x: coordinate, y: coordinate, width: size, height: size, pixels: z.array(color) }).strict(),
+  z.object({ op: z.literal('rows'), layerId, x: coordinate, y: coordinate, rows: z.array(z.string().regex(ROW_PATTERN, 'Use . for transparent and 1-9, a-w for palette indices 1-32.')).min(1), mode: z.enum(['replace', 'over']).optional() }).strict(),
   z.object({ op: z.literal('line'), layerId, x1: coordinate, y1: coordinate, x2: coordinate, y2: coordinate, color }).strict(),
   z.object({ op: z.literal('rect'), layerId, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),
   z.object({ op: z.literal('ellipse'), layerId, x: coordinate, y: coordinate, width: size, height: size, color, filled: z.boolean().optional() }).strict(),

@@ -561,6 +561,64 @@ describe('MCP transport', () => {
     expect(png.data[3]).toBe(0);
   });
 
+  it('reads compact rows that the rows operation reproduces exactly and bounds the region size', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const drawn = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'draw-rows', editScope: { layerIds: ['body', 'sword'] },
+      operations: [{ op: 'rows', layerId: 'body', x: 1, y: 2, rows: ['121', '.3.'] }, { op: 'pixels', layerId: 'sword', points: [[2, 3, 4]] }],
+    } });
+    expect(drawn.isError, JSON.stringify(drawn.content)).not.toBe(true);
+    const composite = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, rect: { x: 0, y: 2, width: 4, height: 2 } } });
+    expect(composite.structuredContent).toMatchObject({ source: 'composite', x: 0, y: 2, width: 4, height: 2, rows: ['.121', '..4.'], legend: { '.': 'transparent', 1: '#0F380F' } });
+    const layer = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, layerId: 'body' } });
+    expect(layer.structuredContent!.rows).toEqual(['........', '........', '.121....', '..3.....', '........', '........', '........', '........']);
+    const copy = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Copy', type: 'item', width: 8, height: 8 } })).structuredContent as unknown as AssetDetail;
+    await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: copy.asset.id, expectedRevision: copy.revision.id, requestId: 'replay-rows', editScope: { layerIds: ['body'] },
+      operations: [{ op: 'rows', layerId: 'body', x: 0, y: 0, rows: layer.structuredContent!.rows }],
+    } });
+    const original = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>().revision.document.layers[0].pixels;
+    expect((await app.inject(`/api/assets/${copy.asset.id}`)).json<AssetDetail>().revision.document.layers[0].pixels).toEqual(original);
+    const wide = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Wide', type: 'prop', width: 200, height: 100 } })).structuredContent as unknown as AssetDetail;
+    const tooLarge = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: wide.asset.id } });
+    expect(tooLarge.isError).toBe(true);
+    expect(JSON.parse(tooLarge.content[0].text!)).toMatchObject({ error: { code: 'REGION_TOO_LARGE' } });
+    const outside = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, rect: { x: 7, y: 0, width: 2, height: 1 } } });
+    expect(JSON.parse(outside.content[0].text!)).toMatchObject({ error: { code: 'INVALID_RECT' } });
+    const unknown = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, layerId: 'cape' } });
+    expect(JSON.parse(unknown.content[0].text!)).toMatchObject({ error: { code: 'UNKNOWN_LAYER' } });
+  });
+
+  it('answers apply_operations compactly by default and in full on request', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const compact = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail) } });
+    const current = (await app.inject(`/api/assets/${detail.asset.id}`)).json<AssetDetail>();
+    expect(compact.structuredContent).toEqual({
+      assetId: detail.asset.id, revisionId: current.revision.id, parentId: detail.revision.id, label: 'Pixel bearbeitet',
+      diff: { changedPixels: 2, changedLayers: ['body'], boundingBox: { x: 1, y: 1, width: 2, height: 1 } },
+      validation: { valid: true, colorCount: 2, opaquePixels: 2, boundingBox: { x: 1, y: 1, width: 2, height: 1 }, isolatedPixels: 0, issues: [] },
+      layers: [{ id: 'body', visible: true, locked: false }, { id: 'sword', visible: true, locked: false }],
+    });
+    expect(JSON.stringify(compact.structuredContent)).not.toContain('palette');
+    const full = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: detail.asset.id, ...paint(current, 'full'), response: 'full',
+      operations: [{ op: 'pixels', layerId: 'body', points: [[1, 1, 3]] }],
+    } });
+    expect(full.structuredContent).toMatchObject({ asset: { id: detail.asset.id }, revision: { parentId: current.revision.id, document: { palette: current.revision.document.palette } }, diff: { changedPixels: 1 } });
+  });
+
+  it('returns native and enlarged inspection images in one call and rejects oversized renders', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const inspected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: detail.asset.id, scales: [1, 8] } });
+    expect(inspected.isError).not.toBe(true);
+    const images = inspected.content.filter(content => content.type === 'image').map(image => PNG.sync.read(Buffer.from(image.data!, 'base64')));
+    expect(images.map(png => [png.width, png.height])).toEqual([[8, 8], [64, 64]]);
+    expect(inspected.structuredContent).toMatchObject({ scale: 1, imageWidth: 8, images: [{ scale: 1, width: 8, height: 8 }, { scale: 8, width: 64, height: 64 }] });
+    const huge = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: detail.asset.projectId, name: 'Huge', type: 'prop', width: 130, height: 130 } })).json<AssetDetail>();
+    const rejected = await rpc<ToolResult>(app, 'tools/call', { name: 'inspect_asset', arguments: { assetId: huge.asset.id, scales: [1, 32] } });
+    expect(JSON.parse(rejected.content[0].text!)).toMatchObject({ error: { code: 'RENDER_SIZE' } });
+  });
+
   it('returns safe tool errors for malformed input and engine rejection without adding a revision', async () => {
     const app = await open(); const { detail } = await setup(app);
     const malformed = await rpc<ToolResult>(app, 'tools/call', {

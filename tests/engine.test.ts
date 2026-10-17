@@ -94,6 +94,28 @@ describe('deterministic drawing', () => {
     expect(a.validation.valid).toBe(true);
   });
 
+  it('writes compact rows identically to patch and keeps pixels under "." in over mode', () => {
+    const pixels = [1, 0, 3, 2, 2, 0];
+    const patched = run(make(), [{ op: 'patch', layerId: 'base', x: 1, y: 1, width: 3, height: 2, pixels }]);
+    const rows = run(make(), [{ op: 'rows', layerId: 'base', x: 1, y: 1, rows: ['1.3', '22.'] }]);
+    expect(rows.document).toEqual(patched.document);
+    expect(rows.diff).toEqual(patched.diff);
+    const over = run(patched.document, [{ op: 'rows', layerId: 'base', x: 1, y: 1, rows: ['..2', '.3.'], mode: 'over' }]).document;
+    expect(over.layers[0].pixels.slice(4, 12)).toEqual([0, 1, 0, 2, 0, 2, 3, 0]);
+    const wide = createDocument({ width: 2, height: 1, palette: ['#00000000', ...Array.from({ length: 32 }, (_, i) => `#0000${(i + 1).toString(16).padStart(2, '0')}`)] });
+    expect(run(wide, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['aw'] }]).document.layers[0].pixels).toEqual([10, 32]);
+  });
+
+  it('rejects malformed, unknown, out-of-palette or clipped rows atomically', () => {
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['11', '1'] }])).toThrow('INVALID_ROWS');
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1A'] }])).toThrow('INVALID_ROWS');
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: [] }])).toThrow('INVALID_ROWS');
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['4'] }])).toThrow('INVALID_COLOR');
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 3, y: 0, rows: ['11'] }])).toThrow('INVALID_RECT');
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1'], mode: 'under' } as unknown as Operation])).toThrow('INVALID_OPERATION');
+    expect(() => run(make(), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1'] }], { layerIds: ['base'], rect: { x: 1, y: 1, width: 1, height: 1 } })).toThrow('SCOPE_VIOLATION');
+  });
+
   it('uses exact Bresenham pixels for a line', () => {
     const doc = run(make(), [{ op: 'line', layerId: 'base', x1: 0, y1: 0, x2: 3, y2: 3, color: 1 }]).document;
     expect(doc.layers[0].pixels).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);

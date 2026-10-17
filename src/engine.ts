@@ -1,3 +1,4 @@
+import { rowIndex } from './raster-text.js';
 import type {
   EditScope, Issue, Operation, PixelDiff, PixelDocument, PixelLayer, PixelStyle,
   ProjectStyle, Rect, ValidationReport,
@@ -165,6 +166,15 @@ export function composite(doc: PixelDocument): Uint8Array {
   return renderUnchecked(doc);
 }
 
+/** Palette indices of one layer, or of the visible composite when no layer is given. */
+export function readIndices(doc: PixelDocument, layerId?: string): ArrayLike<number> {
+  assertDocument(doc);
+  if (layerId === undefined) return compositeIndices(doc);
+  const layer = doc.layers.find(item => item.id === layerId);
+  requireValue(layer, 'UNKNOWN_LAYER', `Unknown layer: ${layerId}.`);
+  return layer.pixels;
+}
+
 type AppliedOperations = {
   document: PixelDocument; diff: PixelDiff; validation: ValidationReport;
 };
@@ -253,6 +263,19 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         const area = rect(operation);
         requireValue(Array.isArray(operation.pixels) && operation.pixels.length === area.width * area.height, 'INVALID_PATCH', 'Patch pixels must match its dimensions.');
         for (let i = 0; i < operation.pixels.length; i++) write(layer, area.x + i % area.width, area.y + Math.floor(i / area.width), color(operation.pixels[i]));
+        break;
+      }
+      case 'rows': {
+        const layer = layerFor(operation.layerId);
+        requireValue(operation.mode === undefined || operation.mode === 'replace' || operation.mode === 'over', 'INVALID_OPERATION', 'Rows mode must be replace or over.');
+        requireValue(Array.isArray(operation.rows) && operation.rows.length > 0 && Array.from(operation.rows).every(row => typeof row === 'string' && row.length > 0 && row.length === operation.rows[0].length), 'INVALID_ROWS', 'Rows must be non-empty strings of equal length.');
+        const area = rect({ x: operation.x, y: operation.y, width: operation.rows[0].length, height: operation.rows.length });
+        for (let y = 0; y < area.height; y++) for (let x = 0; x < area.width; x++) {
+          const symbol = operation.rows[y][x]; const value = rowIndex(symbol);
+          requireValue(value >= 0, 'INVALID_ROWS', `Unknown row symbol "${symbol}". Use . for transparent and 1-9, a-w for palette indices 1-32.`);
+          if (operation.mode === 'over' && value === 0) continue;
+          write(layer, area.x + x, area.y + y, color(value));
+        }
         break;
       }
       case 'line': {
