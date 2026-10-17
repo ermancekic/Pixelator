@@ -7,7 +7,7 @@ const offset = z.number().int();
 const color = z.number().int().min(0).max(32);
 const id = z.string().min(1).max(100);
 const name = z.string().trim().min(1).max(160);
-export const assetType = z.enum(['character', 'item', 'prop', 'ui']);
+export const assetType = z.enum(['character', 'item', 'prop', 'ui', 'tileset']);
 export const preset = z.enum(['1-bit', 'game-boy', '8-bit', '16-bit']);
 export const palette = z.array(z.string().regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/)).min(2).max(33);
 export const rect = z.object({ x: coordinate, y: coordinate, width: size, height: size }).strict();
@@ -29,13 +29,23 @@ const legacyDocumentSchema = z.object({
   }).strict()).min(1).max(32),
   pivot,
 }).strict();
+const terrainMode = z.enum(['corner', 'edge', 'mixed']);
+const terrainType = z.object({ name, color: z.string().regex(/^#[0-9a-fA-F]{6}$/) }).strict();
+const tileText = z.string().trim().min(1).max(80);
+const tileFields = {
+  name: tileText, type: tileText, probability: z.number().min(0).max(1000),
+  collision: z.array(z.object({ x: coordinate, y: coordinate, width: size, height: size }).strict()).max(8),
+  terrain: z.array(z.number().int().min(0).max(8)).length(9),
+};
+const tileInfo = z.object({ id: z.number().int().min(0), name: tileFields.name.optional(), type: tileFields.type.optional(), probability: tileFields.probability.optional(), collision: tileFields.collision.optional(), terrain: tileFields.terrain.optional() }).strict();
+const tilesetSchema = z.object({ tileWidth: size, tileHeight: size, terrainMode, terrains: z.array(terrainType).max(8), tiles: z.array(tileInfo) }).strict();
 const documentSchemaV2 = z.object({
   schemaVersion: z.literal(2), width: size, height: size, palette,
   maxColors: z.number().int().min(1).max(32), paletteLocked: z.boolean(),
   layers: z.array(z.object({ id, name, visible: z.boolean(), locked: z.boolean() }).strict()).min(1).max(32),
   frames: z.array(z.object({ id, durationMs, cels: z.record(z.string(), z.array(color)) }).strict()).min(1).max(64),
   tags: z.array(z.object({ name, from: z.number().int().min(0), to: z.number().int().min(0), direction: tagDirection, loop: z.boolean() }).strict()).max(32),
-  pivot,
+  pivot, tileset: tilesetSchema.optional(),
 }).strict();
 /** Accepts documents written before animation support; callers upgrade them with upgradeDocument. */
 export const documentSchema = z.discriminatedUnion('schemaVersion', [legacyDocumentSchema, documentSchemaV2]);
@@ -57,6 +67,8 @@ export const operation = z.discriminatedUnion('op', [
   z.object({ op: z.literal('rotate'), ...draw, turns: z.union([z.literal(1), z.literal(2), z.literal(3)]), rect: rect.optional() }).strict(),
   z.object({ op: z.literal('replace'), ...draw, from: color, to: color, rect: rect.optional() }).strict(),
   z.object({ op: z.literal('outline'), ...draw, color, rect: rect.optional(), reference: z.enum(['layer', 'composite']).optional(), corners: z.boolean().optional() }).strict(),
+  z.object({ op: z.literal('shift'), ...draw, dx: offset, dy: offset, rect: rect.optional() }).strict(),
+  z.object({ op: z.literal('autotile'), ...draw, template: z.enum(['blob', 'edge', 'corner']), x: coordinate.optional(), y: coordinate.optional(), terrain: z.number().int().min(1).max(8).optional() }).strict(),
   z.object({ op: z.literal('stamp'), ...draw, sourceLayerId: id.optional(), sourceFrameId: id.optional(), rect: rect.optional(), dx: offset.optional(), dy: offset.optional(), mode: z.enum(['over', 'replace']).optional() }).strict(),
   z.object({ op: z.literal('add_layer'), id, name }).strict(),
   z.object({ op: z.literal('duplicate_layer'), layerId, id, name }).strict(),
@@ -73,6 +85,12 @@ export const operation = z.discriminatedUnion('op', [
   z.object({ op: z.literal('set_tags'), tags: z.array(tagInput).max(32) }).strict(),
   z.object({ op: z.literal('palette'), colors: palette, remap: z.enum(['index', 'nearest']).optional() }).strict(),
   z.object({ op: z.literal('pivot'), x: z.number().min(0), y: z.number().min(0) }).strict(),
+  z.object({ op: z.literal('tileset'), tileWidth: size.optional(), tileHeight: size.optional(), terrainMode: terrainMode.optional(), terrains: z.array(terrainType).max(8).optional() }).strict(),
+  z.object({ op: z.literal('remove_tileset') }).strict(),
+  z.object({ op: z.literal('tile_properties'), tiles: z.array(z.object({
+    id: z.number().int().min(0), name: tileFields.name.nullable().optional(), type: tileFields.type.nullable().optional(), probability: tileFields.probability.nullable().optional(),
+    collision: tileFields.collision.nullable().optional(), terrain: tileFields.terrain.nullable().optional(),
+  }).strict()).min(1).max(4096) }).strict(),
 ]);
 export const editScope = z.object({
   layerIds: z.array(id).max(32), rect: rect.optional(), mask: z.array(z.string().regex(/^[.#]+$/, 'Use # for writable and . for protected pixels.')).min(1).optional(), frameIds: z.array(id).min(1).max(64).optional(),
@@ -90,6 +108,7 @@ export const createAssetInput = z.object({
   layers: z.array(z.object({ id, name }).strict()).min(1).max(32).optional(),
   frames: z.array(z.object({ id, durationMs: durationMs.optional() }).strict()).min(1).max(64).optional(),
   animationTags: z.array(tagInput).max(32).optional(),
+  tileWidth: size.optional(), tileHeight: size.optional(),
   sourceAssetId: id.optional(), runId: id.optional(),
 }).strict();
 export const projectInput = z.object({ name, preset: preset.optional() }).strict();

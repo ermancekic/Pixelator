@@ -38,6 +38,10 @@ Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm
 | Pinsel, Muster, Schattieren | Pinselgrößen und -formen, an der Leinwand ausgerichtete Muster mit optionaler Zweitfarbe sowie Schattieren entlang Palette/Helligkeit; Transparenz bleibt beim Schattieren unverändert. |
 | Palettendateien und Export | GPL/PAL/HEX/TXT werden gelesen und GPL/PAL/HEX geschrieben; „Pixel zuordnen“ ersetzt jedes Pixel durch die ähnlichste Farbe. PNG, Sheet und GIF lassen sich 1–16× exportieren; Sheet-JSON adressiert das vergrößerte Bild. |
 | Referenzbild | Hinter/über der Zeichnung, Deckkraft und Einpassung einstellbar; keine Änderung an Dokument, Revisionen oder Exporten. |
+| Tileset-Raster | Raster nur bei teilbarer Leinwand; Kachel-IDs zeilenweise; Metadaten (Name, Klasse, Häufigkeit, Kollision im Kachelbereich, Terrain nur auf vom Modus gelesenen Positionen) werden validiert. Neue Kachelgröße setzt Metadaten zurück; Leinwandänderungen um ganze Kacheln nehmen sie mit, andere werden abgelehnt. |
+| Autotiles | Blob 47, Kanten 16 und Ecken 15 entstehen aus den Schlüsselkacheln, sind gelabelt und vollständig; ungerade Kachelgrößen und zu kleine Raster werden mit Größenangabe abgelehnt. Fehlende Kombinationen erzeugen `TERRAIN_INCOMPLETE` und Magenta-Zellen in der Testkarte. |
+| Nahtlos und Versatz | Striche und Formen laufen auf wrappenden Achsen über den Rand; `shift` versetzt mit Umlauf, nur im Rechteck. Geisterkacheln verändern keine Daten. |
+| Tileset-Export | PNG mit Extrude/Abstand; animierte Kacheln als Zeilenblöcke; Tiled TSX/TSJ mit Klasse, Name, Kollision, Animation und Wang-Set; Godot `.tres` mit Terrain-Modus, Peering-Bits, Physik, Custom Data und Animation; Unity-Manifest. Godot lädt das TileSet, und sein Terrain-Pinsel wählt dieselben Kacheln wie die Testkarte; ein Tiled-Parser liest TSX und TSJ gleich. |
 | Vorschau und Kacheln | 1×/2×/4×/8× zeigen feste Pixelmaße ohne automatisches Schrumpfen; große Bilder scrollen. Hintergrundwechsel und 3×3-Wiederholung verändern keine Dokumentdaten. Laufender Strich und historische Revision werden korrekt dargestellt. |
 
 ## Echter MCP-Durchlauf

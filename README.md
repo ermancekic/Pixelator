@@ -18,6 +18,10 @@ Lokaler Pixel-Art-Editor mit MCP für Codex, Claude und Antigravity. Benötigt N
 - Zeichensymmetrie und Pixel-Perfect-Stift
 - Paletten mit Import/Export (GPL, PAL, HEX) und Transparenz
 - Referenzbild zum Abpausen
+- Tilesets mit Kachelraster, Kollision und Terrain
+- Autotiles (Blob, Kanten, Ecken) aus fünf Schlüsselkacheln und Terrain-Testkarte
+- Nahtloses Zeichnen
+- Tileset-Export für Tiled, Godot und Unity
 - Zoom, Handwerkzeug, Raster und Tastenkürzel
 - Größenverstellbare Bereiche mit gespeicherter Fensteraufteilung
 - Vorschau mit 3×3-Kachelung
@@ -56,7 +60,7 @@ claude mcp add --transport http pixelator http://127.0.0.1:4317/mcp --scope user
 { "mcpServers": { "pixelator": { "serverUrl": "http://127.0.0.1:4317/mcp" } } }
 ```
 
-Danach die MCP-Verbindung im Client neu laden. [Weitere Details](docs/mcp.md) · [Editor](docs/editor.md) · [Tests](docs/testing.md)
+Danach die MCP-Verbindung im Client neu laden. [Weitere Details](docs/mcp.md) · [Editor](docs/editor.md) · [Tiles](docs/tiles.md) · [Tests](docs/testing.md)
 
 Daten liegen in `data/`. Für Backups die App beenden und den Ordner sichern.
 

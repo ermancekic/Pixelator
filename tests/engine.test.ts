@@ -652,3 +652,67 @@ describe('selection masks, canvas size, merging and palette remapping', () => {
     expect(nearestColor('#000000', ['#00000000', '#101010', '#FFFFFF'])).toBe(1);
   });
 });
+
+describe('tilesets', () => {
+  const full = (doc: PixelDocument): EditScope => ({ layerIds: doc.layers.map(layer => layer.id), allowLayerChanges: true });
+  const tiled = (columns = 8, rows = 6, size = 2) => createDocument({ width: columns * size, height: rows * size, palette, tileSize: { width: size, height: size } });
+
+  it('sets, validates and removes a tile grid with terrains and per-tile metadata', () => {
+    const doc = make(8, 4);
+    expect(() => run(doc, [{ op: 'tileset', tileWidth: 3, tileHeight: 4 }], full(doc))).toThrow('TILE_GRID');
+    expect(() => run(doc, [{ op: 'tileset', tileWidth: 4, tileHeight: 4 }], { layerIds: ['base'] })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    let next = run(doc, [{ op: 'tileset', tileWidth: 4, tileHeight: 4, terrainMode: 'edge', terrains: [{ name: 'Weg', color: '#aa5500' }] }], full(doc)).document;
+    expect(next.tileset).toEqual({ tileWidth: 4, tileHeight: 4, terrainMode: 'edge', terrains: [{ name: 'Weg', color: '#AA5500' }], tiles: [] });
+    next = run(next, [{ op: 'tile_properties', tiles: [{ id: 1, name: 'Weg', type: 'ground', probability: 0.5, collision: [{ x: 0, y: 2, width: 4, height: 2 }], terrain: [1, 0, 1, 0, 0, 0, 0, 0, 1] }] }], full(next)).document;
+    expect(next.tileset!.tiles).toEqual([{ id: 1, name: 'Weg', type: 'ground', probability: 0.5, collision: [{ x: 0, y: 2, width: 4, height: 2 }], terrain: [1, 0, 1, 0, 0, 0, 0, 0, 1] }]);
+    expect(validateDocument(next).valid).toBe(true);
+    const cleared = run(next, [{ op: 'tile_properties', tiles: [{ id: 1, name: null, collision: null, probability: null, type: null, terrain: null }] }], full(next)).document;
+    expect(cleared.tileset!.tiles).toEqual([]);
+    expect(() => run(next, [{ op: 'tile_properties', tiles: [{ id: 2, name: 'x' }] }], full(next))).toThrow('INVALID_TILE');
+    expect(() => run(next, [{ op: 'tile_properties', tiles: [{ id: 0, terrain: [0, 1, 0, 0, 0, 0, 0, 0, 0] }] }], full(next))).toThrow('INVALID_TILESET');
+    expect(() => run(next, [{ op: 'tile_properties', tiles: [{ id: 0, collision: [{ x: 2, y: 0, width: 3, height: 1 }] }] }], full(next))).toThrow('INVALID_TILESET');
+    const mixed = run(next, [{ op: 'tileset', terrainMode: 'corner', terrains: [] }], full(next)).document;
+    expect(mixed.tileset!.tiles).toEqual([{ id: 1, name: 'Weg', type: 'ground', probability: 0.5, collision: [{ x: 0, y: 2, width: 4, height: 2 }] }]);
+    expect(run(next, [{ op: 'tileset', tileWidth: 2, tileHeight: 2 }], full(next)).document.tileset!.tiles).toEqual([]);
+    expect(run(next, [{ op: 'remove_tileset' }], full(next)).document.tileset).toBeUndefined();
+    expect(() => run(doc, [{ op: 'remove_tileset' }], full(doc))).toThrow('NO_TILESET');
+  });
+
+  it('keeps tile metadata with its pixels when the canvas grows or shrinks by whole tiles', () => {
+    let doc = tiled(2, 2, 2);
+    doc = run(doc, [{ op: 'tile_properties', tiles: [{ id: 1, name: 'b' }, { id: 3, name: 'd' }] }], full(doc)).document;
+    const grown = run(doc, [{ op: 'resize_canvas', width: 6, height: 4, offsetX: 2 }], full(doc)).document;
+    expect(grown.tileset!.tiles).toEqual([{ id: 2, name: 'b' }, { id: 5, name: 'd' }]);
+    const cropped = run(doc, [{ op: 'resize_canvas', width: 2, height: 4, offsetX: -2 }], full(doc)).document;
+    expect(cropped.tileset!.tiles).toEqual([{ id: 0, name: 'b' }, { id: 1, name: 'd' }]);
+    expect(() => run(doc, [{ op: 'resize_canvas', width: 5, height: 4 }], full(doc))).toThrow('TILE_GRID');
+  });
+
+  it('offsets a region with wrap-around', () => {
+    const doc = run(make(4, 1), [points([[0, 0, 1], [3, 0, 2]])]).document;
+    expect(cel(run(doc, [{ op: 'shift', layerId: 'base', dx: 1, dy: 0 }]).document, 0)).toEqual([2, 1, 0, 0]);
+    expect(cel(run(doc, [{ op: 'shift', layerId: 'base', dx: -1, dy: 3, rect: { x: 0, y: 0, width: 2, height: 1 } }]).document, 0)).toEqual([0, 1, 0, 2]);
+  });
+
+  it('completes a blob template from five key tiles and labels it as a mixed terrain', () => {
+    let doc = tiled();
+    // Key tiles as 2x2 tiles in a single color each: single, horizontal, vertical, cross, fill.
+    doc = run(doc, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1122331122', '1122331122'] }]).document;
+    const filled = run(doc, [{ op: 'autotile', layerId: 'base', template: 'blob' }], full(doc));
+    const result = filled.document;
+    expect(result.tileset!.terrainMode).toBe('mixed');
+    expect(result.tileset!.terrains).toEqual([{ name: 'Terrain 1', color: '#6DAA2C' }]);
+    expect(result.tileset!.tiles).toHaveLength(47);
+    expect(result.tileset!.tiles[0]).toEqual({ id: 0, terrain: [0, 0, 0, 0, 0, 0, 0, 0, 1] });
+    expect(validateDocument(result).issues.some(issue => issue.code === 'TERRAIN_INCOMPLETE')).toBe(false);
+    expect(filled.diff.changedPixels).toBeGreaterThan(100);
+    expect(() => run(tiled(7, 6), [{ op: 'autotile', layerId: 'base', template: 'blob' }], full(tiled(7, 6)))).toThrow('TEMPLATE_DOES_NOT_FIT');
+    expect(() => run(tiled(8, 6, 3), [{ op: 'autotile', layerId: 'base', template: 'blob' }], full(tiled(8, 6, 3)))).toThrow('TILE_SIZE');
+    expect(() => run(make(16, 12), [{ op: 'autotile', layerId: 'base', template: 'edge' }], full(make(16, 12)))).toThrow('NO_TILESET');
+    const edge = run(tiled(8, 3), [{ op: 'autotile', layerId: 'base', template: 'edge', y: 1, terrain: 2 }], full(tiled(8, 3))).document;
+    expect(edge.tileset).toMatchObject({ terrainMode: 'edge', terrains: [{ name: 'Terrain 1' }, { name: 'Terrain 2' }] });
+    expect(edge.tileset!.tiles.map(tile => tile.id)).toEqual(Array.from({ length: 16 }, (_, i) => 8 + i));
+    const incomplete = run(result, [{ op: 'tile_properties', tiles: [{ id: 46, terrain: null }] }], full(result)).document;
+    expect(validateDocument(incomplete).issues.find(issue => issue.code === 'TERRAIN_INCOMPLETE')?.message).toContain('1 mixed combinations');
+  });
+});

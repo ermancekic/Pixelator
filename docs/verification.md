@@ -2,6 +2,19 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
+## Ergänzung: Tiles
+
+Am 17. Oktober 2026 bestanden **218 Tests in 15 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Kachelraster und Metadaten-Validierung, `tileset`/`tile_properties`/`remove_tileset`, Remap bei `resize_canvas`, `shift`, Autotile-Komposition (47/16/15 Kombinationen, Viertel- und Halbversatz-Regeln), Terrain-Zuordnung mit Wahrscheinlichkeit, Testkarten-Render, Tileset-Layout mit Extrude, Tiled-/Godot-/Unity-Export, REST- und MCP-Durchlauf sowie nahtloses Zeichnen.
+
+**Externe Werkzeuge:** Ein mit der Engine erzeugtes 16×16-Blob-Tileset (Autotile aus fünf Schlüsselkacheln, Name, Klasse, Kollision, Häufigkeit, zwei Frames, Extrude 1) wurde exportiert und mit den Originalwerkzeugen geprüft.
+- **Godot 4.3** (headless, offizielles Linux-Release) lädt die `.tres` mit 47 Kacheln, Terrain-Set „Gras“ im Modus 0, Kollisionspolygon um die Kachelmitte, Custom Data, Häufigkeit 0,5 und Animation; Frame 2 liegt korrekt bei Pixel (73, 109).
+- Godots eigener Terrain-Pinsel (`set_cells_terrain_connect`) wählte für eine Testform in **48 von 48 Zellen dieselbe Kachel** wie Pixelators Testkarte.
+- **pytiled-parser 2.2.9** las TSX und TSJ identisch: 96 Kacheln (2 Frames), Rand 1, Abstand 2, Animation 4→52, Kollisionsobjekt und ein Wang-Set mit 46 Kacheln. Die Einzelkachel bleibt ohne Wang-ID, weil Tiled kein Zentrum speichert.
+
+**Browser** (Chromium über Playwright, eigener Datenordner): Tileset im Dialog anlegen; Schlüsselkacheln markiert; „Vorlage vervollständigen“ ergibt 47 gelabelte Kacheln und eine vollständige Testkarte; Kachel-Werkzeug, Name, Klasse und Kollision speichern; Terrain-Widget erzeugt „1 von 47 Kombinationen fehlen“; acht Geisterkacheln und ein Strich über den rechten Rand, der links weiterläuft; Versatz ½ nur innerhalb der gewählten Kachel; Tiled- und Godot-Download mit Extrude; Leinwand um eine Kachelspalte erweitert, Metadaten folgen. Keine Seiten- oder Konsolenfehler.
+
+**Nicht geprüft:** Import in Tiled selbst (nur über den Parser), Unity-Import des Manifests und ein realer Agentenauftrag für ein Tileset.
+
 ## Ergänzung: Editor-Grundfunktionen
 
 Am 17. Oktober 2026 bestanden **197 Tests in 13 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neue Tests decken Auswahlmasken im Engine-Scope, Kontur-, Polygon- und Palettenoptionen, `merge_layers`, `resize_canvas` (einschließlich Assetgröße, Wiederherstellen und MCP), skalierte PNG-/Sheet-Exporte, Palettendateien sowie die Editor-Helfer für Auswahl, Zwischenablage, Pinsel, Muster und Schattieren ab.

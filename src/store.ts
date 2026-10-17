@@ -153,12 +153,14 @@ export class Store extends EventEmitter {
     }
     const width = input.width ?? project.style.width;
     const height = input.height ?? project.style.height;
+    if ((input.tileWidth === undefined) !== (input.tileHeight === undefined)) throw new AppError('INVALID_TILESET', 'tileWidth und tileHeight gehören zusammen.');
     const doc = document ?? createDocument({
       width, height, palette: input.palette ?? project.style.palette,
       maxColors: input.maxColors ?? project.style.maxColors, paletteLocked: project.style.paletteLocked,
       layers: input.layers ?? [{ id: 'body', name: input.type === 'character' ? 'Körper' : 'Basis' }],
       frames: input.frames, tags: input.animationTags,
       pivot: { x: width / 2, y: input.type === 'character' ? height : height / 2 },
+      ...(input.tileWidth && input.tileHeight ? { tileSize: { width: input.tileWidth, height: input.tileHeight } } : {}),
     });
     const validation = validateDocument(doc);
     if (!validation.valid) throw new AppError('INVALID_DOCUMENT', validation.issues.filter(i => i.severity === 'error').map(i => i.message).join(' '));
