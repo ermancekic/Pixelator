@@ -100,6 +100,56 @@ describe('deterministic drawing', () => {
     expect(get(selected.document, 0, 0)).toBe(0);
   });
 
+  it('fills disconnected equal indices globally within the selection', () => {
+    const doc = run(make(5, 1), [points([[0, 0, 1], [2, 0, 1], [4, 0, 1]])]).document;
+    const selected = run(doc, [{ op: 'fill', layerId: 'base', x: 2, y: 0, color: 2, contiguous: false }], {
+      layerIds: ['base'], rect: { x: 1, y: 0, width: 4, height: 1 },
+    });
+    expect(selected.document.layers[0].pixels).toEqual([1, 0, 2, 0, 2]);
+    expect(doc.layers[0].pixels).toEqual([1, 0, 1, 0, 1]);
+    expect(selected.diff.changedPixels).toBe(2);
+  });
+
+  it('fills a blank layer inside a separate visible outline without changing the reference layer', () => {
+    const doc = createDocument({ width: 5, height: 3, palette, layers: [{ id: 'color', name: 'Color' }, { id: 'outline', name: 'Outline' }] });
+    const outlined = run(doc, [{ op: 'rect', layerId: 'outline', x: 0, y: 0, width: 5, height: 3, color: 1, filled: false }]).document;
+    const before = structuredClone(outlined);
+    const filled = run(outlined, [{ op: 'fill', layerId: 'color', x: 1, y: 1, color: 2, reference: 'composite' }], { layerIds: ['color'] });
+    expect(filled.document.layers[0].pixels).toEqual([0, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0]);
+    expect(filled.document.layers[1]).toEqual(before.layers[1]);
+    expect(outlined).toEqual(before);
+    expect(filled.diff.changedLayers).toEqual(['color']);
+    expect(run(outlined, [{ op: 'fill', layerId: 'color', x: 1, y: 1, color: 2 }], { layerIds: ['color'] }).diff.changedPixels).toBe(15);
+  });
+
+  it('samples topmost visible indices through transparency even when paint matches the sampled color', () => {
+    const doc = createDocument({ width: 4, height: 1, palette, layers: [
+      { id: 'background', name: 'Background' }, { id: 'paint', name: 'Paint' },
+      { id: 'cover', name: 'Cover' }, { id: 'hidden', name: 'Hidden' },
+    ] });
+    doc.layers[0].pixels = [1, 1, 1, 1];
+    doc.layers[2].pixels = [0, 2, 0, 2];
+    doc.layers[3].pixels = [3, 3, 3, 3]; doc.layers[3].visible = false;
+    const operation: Operation = { op: 'fill', layerId: 'paint', x: 0, y: 0, color: 1, reference: 'composite' };
+    expect(run(doc, [operation], { layerIds: ['paint'] }).document.layers[1].pixels).toEqual([1, 0, 0, 0]);
+    const global = run(doc, [{ ...operation, contiguous: false }], { layerIds: ['paint'] });
+    expect(global.document.layers[1].pixels).toEqual([1, 0, 1, 0]);
+    expect(global.document.layers.filter(layer => layer.id !== 'paint')).toEqual(doc.layers.filter(layer => layer.id !== 'paint'));
+    const selected = run(doc, [{ ...operation, x: 2, contiguous: false }], { layerIds: ['paint'], rect: { x: 1, y: 0, width: 3, height: 1 } });
+    expect(selected.document.layers[1].pixels).toEqual([0, 0, 1, 0]);
+  });
+
+  it('keeps composite flood traversal inside the edit rectangle and respects target locks', () => {
+    const doc = make();
+    const operation: Operation = { op: 'fill', layerId: 'base', x: 1, y: 1, color: 2, reference: 'composite' };
+    const selected = run(doc, [operation], { layerIds: ['base'], rect: { x: 1, y: 1, width: 2, height: 2 } });
+    expect(selected.diff.changedPixels).toBe(4);
+    expect(selected.diff.boundingBox).toEqual({ x: 1, y: 1, width: 2, height: 2 });
+    expect(() => run(doc, [operation], { layerIds: ['base'], rect: { x: 0, y: 0, width: 1, height: 1 } })).toThrow('SCOPE_VIOLATION');
+    doc.layers[0].locked = true;
+    expect(() => run(doc, [operation])).toThrow('LAYER_LOCKED');
+  });
+
   it('adds exactly one eight-neighbor outline without expanding the source repeatedly', () => {
     const doc = run(make(5, 5), [points([[2, 2, 1]]), { op: 'outline', layerId: 'base', color: 2 }]).document;
     expect(doc.layers[0].pixels.filter(color => color === 2)).toHaveLength(8);
@@ -116,6 +166,8 @@ describe('deterministic drawing', () => {
     expect(() => run(make(), [{ op: 'line', layerId: 'base', x1: 0, y1: 0, x2: Number.MAX_SAFE_INTEGER, y2: 0, color: 0 }])).toThrow('OUT_OF_BOUNDS');
     expect(() => run(make(), [{ op: 'patch', layerId: 'base', x: 0, y: 0, width: 2, height: 2, pixels: [1] }])).toThrow('INVALID_PATCH');
     expect(() => run(make(), [{ op: 'patch', layerId: 'base', x: 0, y: 0, width: 1, height: 1, pixels: new Array(1) }])).toThrow('INVALID_COLOR');
+    expect(() => run(make(), [{ op: 'fill', layerId: 'base', x: 0, y: 0, color: 1, reference: 'unknown' } as unknown as Operation])).toThrow('INVALID_OPERATION');
+    expect(() => run(make(), [{ op: 'fill', layerId: 'base', x: 0, y: 0, color: 1, contiguous: 1 } as unknown as Operation])).toThrow('INVALID_OPERATION');
     expect(() => run(make(), [{ op: 'explode' } as unknown as Operation])).toThrow('UNKNOWN_OPERATION');
   });
 });
@@ -177,6 +229,46 @@ describe('local edit guarantees and atomicity', () => {
 });
 
 describe('selection transforms and layer operations', () => {
+  it('duplicates a layer directly above its source with independent pixels and unchanged source data', () => {
+    const doc = createDocument({ width: 2, height: 1, palette, layers: [{ id: 'base', name: 'Base' }, { id: 'top', name: 'Top' }] });
+    doc.layers[0].pixels = [1, 2];
+    const before = structuredClone(doc);
+    const duplicate: Operation = { op: 'duplicate_layer', layerId: 'base', id: 'copy', name: 'Copy' };
+    const copied = run(doc, [duplicate], { layerIds: ['base', 'top'], allowLayerChanges: true });
+    expect(copied.document.layers.map(layer => layer.id)).toEqual(['base', 'copy', 'top']);
+    expect(copied.document.layers[1]).toEqual({ ...before.layers[0], id: 'copy', name: 'Copy' });
+    expect(copied.document.layers[1].pixels).not.toBe(copied.document.layers[0].pixels);
+    const edited = run(doc, [duplicate, points([[0, 0, 3]], 'copy')], { layerIds: ['base', 'top'], allowLayerChanges: true });
+    expect(edited.document.layers[0]).toEqual(before.layers[0]);
+    expect(edited.document.layers[1].pixels).toEqual([3, 2]);
+    expect(doc).toEqual(before);
+  });
+
+  it('retains hidden and locked flags when duplicating and prevents edits to a locked copy', () => {
+    const doc = make(); doc.layers[0].pixels[0] = 1; doc.layers[0].visible = false; doc.layers[0].locked = true;
+    const before = structuredClone(doc);
+    const duplicate: Operation = { op: 'duplicate_layer', layerId: 'base', id: 'copy', name: 'Copy' };
+    const scope = { layerIds: ['base'], allowLayerChanges: true };
+    const copied = run(doc, [duplicate], scope);
+    expect(copied.document.layers[1]).toMatchObject({ visible: false, locked: true, pixels: doc.layers[0].pixels });
+    expect(() => run(doc, [duplicate, points([[0, 0, 2]], 'copy')], scope)).toThrow('LAYER_LOCKED');
+    expect(doc).toEqual(before);
+  });
+
+  it('requires full metadata scope, a unique valid ID and room below the layer limit to duplicate', () => {
+    const doc = createDocument({ width: 1, height: 1, palette, layers: [{ id: 'base', name: 'Base' }, { id: 'top', name: 'Top' }] });
+    const duplicate: Operation = { op: 'duplicate_layer', layerId: 'base', id: 'copy', name: 'Copy' };
+    const scope = { layerIds: ['base', 'top'], allowLayerChanges: true };
+    expect(() => run(doc, [duplicate])).toThrow('LAYER_CHANGE_FORBIDDEN');
+    expect(() => run(doc, [duplicate], { layerIds: ['base'], allowLayerChanges: true })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    expect(() => run(doc, [duplicate], { ...scope, rect: { x: 0, y: 0, width: 1, height: 1 } })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    expect(() => run(doc, [{ ...duplicate, id: 'top' }], scope)).toThrow('INVALID_LAYERS');
+    expect(() => run(doc, [{ ...duplicate, id: 'bad id' }], scope)).toThrow('INVALID_LAYER');
+    expect(() => run(doc, [{ ...duplicate, layerId: 'missing' }], scope)).toThrow('UNKNOWN_LAYER');
+    const full = createDocument({ width: 1, height: 1, palette, layers: Array.from({ length: 32 }, (_, i) => ({ id: `layer_${i}`, name: `Layer ${i}` })) });
+    expect(() => run(full, [{ ...duplicate, layerId: 'layer_0' }], { layerIds: full.layers.map(layer => layer.id), allowLayerChanges: true })).toThrow('INVALID_LAYERS');
+  });
+
   it('moves overlapping rectangles from a stable source snapshot and clears the source', () => {
     const doc = run(make(), [points([[0, 0, 1], [1, 0, 2]])]).document;
     const moved = run(doc, [{ op: 'move', layerId: 'base', dx: 1, dy: 0, rect: { x: 0, y: 0, width: 2, height: 1 } }]).document;

@@ -266,15 +266,30 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
       }
       case 'fill': {
         const layer = layerFor(operation.layerId); const value = color(operation.color);
+        requireValue(operation.reference === undefined || operation.reference === 'layer' || operation.reference === 'composite', 'INVALID_OPERATION', 'Fill reference must be layer or composite.');
+        requireValue(operation.contiguous === undefined || typeof operation.contiguous === 'boolean', 'INVALID_OPERATION', 'contiguous must be boolean.');
         const x = coordinate(operation.x); const y = coordinate(operation.y);
         requireValue(inside(canvas, x, y), 'OUT_OF_BOUNDS', 'Fill start must be inside the canvas.');
         requireValue(!scopeRect || inside(scopeRect, x, y), 'SCOPE_VIOLATION', 'Fill start must be inside the edit rectangle.');
-        const from = layer.pixels[y * doc.width + x];
-        if (from === value) break;
+        const source = operation.reference === 'composite' ? new Array<number>(doc.width * doc.height).fill(0) : layer.pixels.slice();
+        if (operation.reference === 'composite') for (const referenceLayer of doc.layers) {
+          if (referenceLayer.visible) for (let i = 0; i < source.length; i++) {
+            if (referenceLayer.pixels[i] !== 0) source[i] = referenceLayer.pixels[i];
+          }
+        }
+        const from = source[y * doc.width + x];
+        if (from === value && operation.reference !== 'composite') break;
+        if (operation.contiguous === false) {
+          const area = scopeRect ?? canvas;
+          for (let py = area.y; py < area.y + area.height; py++) for (let px = area.x; px < area.x + area.width; px++) {
+            if (source[py * doc.width + px] === from) write(layer, px, py, value);
+          }
+          break;
+        }
         const queue = [y * doc.width + x]; const seen = new Set<number>();
         for (let i = 0; i < queue.length; i++) {
           const position = queue[i];
-          if (seen.has(position) || layer.pixels[position] !== from) continue;
+          if (seen.has(position) || source[position] !== from) continue;
           seen.add(position);
           const px = position % doc.width; const py = Math.floor(position / doc.width);
           if (scopeRect && !inside(scopeRect, px, py)) continue;
@@ -332,6 +347,14 @@ export function applyOperations(original: PixelDocument, operations: Operation[]
         requireValue(identifier(operation.id) && name(operation.name), 'INVALID_LAYER', 'New layer needs a valid ID and name.');
         requireValue(doc.layers.length < MAX_LAYERS && !doc.layers.some(layer => layer.id === operation.id), 'INVALID_LAYERS', 'Layer limit exceeded or ID already exists.');
         doc.layers.push({ id: operation.id, name: operation.name, visible: true, locked: false, pixels: new Array(doc.width * doc.height).fill(0) });
+        allowedLayers.add(operation.id);
+        break;
+      }
+      case 'duplicate_layer': {
+        requireLayerChanges(); const source = layerFor(operation.layerId, false);
+        requireValue(identifier(operation.id) && name(operation.name), 'INVALID_LAYER', 'New layer needs a valid ID and name.');
+        requireValue(doc.layers.length < MAX_LAYERS && !doc.layers.some(layer => layer.id === operation.id), 'INVALID_LAYERS', 'Layer limit exceeded or ID already exists.');
+        doc.layers.splice(doc.layers.indexOf(source) + 1, 0, { ...source, id: operation.id, name: operation.name, pixels: source.pixels.slice() });
         allowedLayers.add(operation.id);
         break;
       }

@@ -17,6 +17,11 @@ Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm
 | Artist-Run | Abbruch und Limits erhalten den letzten gültigen Stand; Fertigstellen prüft den aktuellen statt eines alten Review-Stands. |
 | Artist Guide | Aktuelle Regeln über `get_workflow`, Ressource und Start/Fortsetzen konsistent verfügbar; Stilkontext beim PNG. |
 | Navigation/Hotkeys | Zoom hält den Punkt am Mauszeiger, bleibt ganzzahlig und begrenzt; Pan verändert keine Rasterdaten; Eingaben und Dialoge blockieren Editor-Kürzel. |
+| Zeichensymmetrie | Stift, Radierer, Linie und Formen spiegeln um die Leinwandmitte; gerade/ungerade Maße und kombinierte Achsen erzeugen korrekte, eindeutige Punkte. Auswahlgrenzen gelten für jedes Ziel; ein Strich bleibt eine Revision. |
+| Pixel-Perfect-Stift | L-Knicke werden optional korrigiert; Geraden, Richtungswechsel und wiederholte Punkte bleiben korrekt. Unter entfernten Eckpunkten erscheint die ursprüngliche Farbe. Vorschau und gespeicherter Strich stimmen überein; Abbruch verwirft die Vorschau. |
+| Füllreferenz und Reichweite | Defaults bewahren bisheriges Fill. Zusammenhängend/global und Ebene/Gesamtbild funktionieren einschließlich Transparenz, verborgener Ebenen, Auswahl und Sperre. Nur die Zielebene wird geschrieben; gleiche Referenz- und Zielfarbe verhindert nötige Zieländerungen nicht. |
+| Ebenenduplikat | Eigener Pixelpuffer, neue eindeutige ID, Kopie unmittelbar oberhalb der Quelle; Quelle unverändert, Sichtbarkeit/Sperre erhalten. Scope, Ebenenlimit und atomare Fehlerbehandlung gelten; Browser und MCP erreichen dieselbe Operation. |
+| Vorschau und Kacheln | 1×/2×/4×/8× zeigen feste Pixelmaße ohne automatisches Schrumpfen; große Bilder scrollen. Hintergrundwechsel und 3×3-Wiederholung verändern keine Dokumentdaten. Laufender Strich und historische Revision werden korrekt dargestellt. |
 
 ## Echter MCP-Durchlauf
 

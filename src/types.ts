@@ -73,13 +73,14 @@ export type Operation =
   | (DrawingBase & { op: 'line'; x1: number; y1: number; x2: number; y2: number; color: number })
   | (DrawingBase & { op: 'rect' | 'ellipse'; x: number; y: number; width: number; height: number; color: number; filled?: boolean })
   | (DrawingBase & { op: 'polygon'; points: [number, number][]; color: number })
-  | (DrawingBase & { op: 'fill'; x: number; y: number; color: number })
+  | (DrawingBase & { op: 'fill'; x: number; y: number; color: number; reference?: 'layer' | 'composite'; contiguous?: boolean })
   | (DrawingBase & { op: 'move' | 'copy'; dx: number; dy: number; rect?: Rect })
   | (DrawingBase & { op: 'flip'; axis: 'x' | 'y'; rect?: Rect })
   | (DrawingBase & { op: 'rotate'; turns: 1 | 2 | 3; rect?: Rect })
   | (DrawingBase & { op: 'replace'; from: number; to: number; rect?: Rect })
   | (DrawingBase & { op: 'outline'; color: number })
   | { op: 'add_layer'; id: string; name: string }
+  | { op: 'duplicate_layer'; layerId: string; id: string; name: string }
   | { op: 'remove_layer'; layerId: string }
   | { op: 'update_layer'; layerId: string; name?: string; visible?: boolean; locked?: boolean }
   | { op: 'reorder_layers'; layerIds: string[] }
