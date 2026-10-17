@@ -37,6 +37,8 @@ Die Testkarte malt eine Beispielform mit den gelabelten Kacheln, wie ein Terrain
 | Godot `.tres` | TileSet mit Atlas, Terrain-Set (Modus 0/1/2) und Peering-Bits, Physik-Polygonen, Custom Data (`name`, `type`), Wahrscheinlichkeit und Animationen. |
 | Unity | Import-Manifest: ein Sprite pro Kachel bei einer Einheit pro Kachel, animierte Kacheln, Namen und Kollision. |
 
+Exportiert wird über „Tileset exportieren …“ im Kachelbereich oder `Strg+S`: Das Exportfenster zeigt das Tileset-Bild und die Beschreibungsdateien vorab, mit wählbaren Zielen, Extrude und Abstand.
+
 **Kanten wiederholen** (Extrude) kopiert die Randpixel jeder Kachel nach außen und verhindert Farbsäume beim Filtern in Engines. Bild und Beschreibung gehören in denselben Ordner, weil die Beschreibung das Bild per Dateinamen referenziert; Godot löst den relativen Pfad neben der `.tres` auf. Die Einzelkachel des Blob-Sets hat in Tiled keine Wang-ID, da Tiled kein Zentrum speichert; Godot nutzt sie über das Zentrums-Terrain.
 
 Pixelator erstellt Tilesets, aber keine Level-Karten. Das Leveldesign bleibt in Tiled, LDtk oder der Engine. Hintergrund und Quellen: [Recherchebericht](<../reports/Tiles für Pixelator.md>).
