@@ -11,6 +11,8 @@ Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm
 | Lokaler Edit | Rasterwerte außerhalb der erlaubten Ebene und des Rechtecks bleiben exakt gleich. Verschieben berücksichtigt Ausgangs- und Zielbereich. |
 | Gesperrte Ebene | Zeichen- und Strukturänderungen umgehen die Sperre nicht. |
 | Revisionen | Alte Revisionen bleiben lesbar; Wiederherstellen erzeugt eine neue aktuelle Revision. |
+| Löschen | Bestätigung nennt Asset bzw. Projekt und endgültigen Umfang. Revisionen, Replay-Anfragen und Aufträge werden atomar entfernt. Varianten bleiben eigenständig; andere Projekte unverändert. Externe Löschungen leeren die betroffene Ansicht und schließen veraltete Löschdialoge. |
+| Große Raster | Füllen und Vorschau bleiben rastergenau; schnelle Striche verlieren keine Zwischenpunkte. Kleine Thumbnails verwenden begrenzte Pixelpuffer. Der Verlauf liefert Metadaten und lädt historische Raster einzeln. |
 | Konkurrenz | Veraltete `expectedRevision` wird abgelehnt; derselbe `requestId` mit demselben Payload erzeugt keine doppelte Änderung. |
 | Render und Export | Nearest-Neighbor-Vorschau; PNG mit korrekten Abmessungen und echtem Alpha; JSON und Unity-Metadaten passen zur Revision. |
 | Persistenz | Nach Service-Neustart sind Projekte, Assets und Revisionen wieder vorhanden. |

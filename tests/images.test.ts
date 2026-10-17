@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PNG } from 'pngjs';
 import { composite, createDocument } from '../src/engine.js';
-import { importPng, renderPng, unityManifest } from '../src/images.js';
+import { importPng, renderPng, renderThumbnail, unityManifest } from '../src/images.js';
 import { Store } from '../src/store.js';
 
 const palette = ['#00000000', '#FF0000', '#0000FF', '#FFFFFF'];
@@ -77,6 +77,26 @@ describe('lossless PNG input', () => {
 });
 
 describe('rendering and Unity coordinates', () => {
+  it('renders bounded nearest-neighbor thumbnails with aspect ratio and compositing preserved', () => {
+    const doc = createDocument({ width: 4, height: 2, palette, layers: [{ id: 'base', name: 'Base' }, { id: 'top', name: 'Top' }] });
+    doc.layers[0].pixels = [1, 0, 2, 3, 0, 1, 3, 2];
+    doc.layers[1].pixels = [0, 0, 1, 0, 0, 0, 0, 0];
+    const thumbnail = PNG.sync.read(renderThumbnail(doc, 2));
+    expect([thumbnail.width, thumbnail.height]).toEqual([2, 1]);
+    expect([...thumbnail.data]).toEqual([255, 0, 0, 255, 255, 0, 0, 255]);
+    const native = PNG.sync.read(renderThumbnail(doc));
+    expect([native.width, native.height]).toEqual([4, 2]);
+    expect([...native.data]).toEqual([...composite(doc)]);
+    const tall = createDocument({ width: 1, height: 1025, palette });
+    expect(PNG.sync.read(renderThumbnail(tall))).toMatchObject({ width: 1, height: 96 });
+    const wide = createDocument({ width: 2048, height: 1024, palette });
+    expect(PNG.sync.read(renderThumbnail(wide))).toMatchObject({ width: 96, height: 48 });
+  });
+
+  it.each([0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1])('rejects invalid thumbnail size %s', size => {
+    expect(() => renderThumbnail(createDocument({ width: 1, height: 1, palette }), size)).toThrow(expect.objectContaining({ code: 'RENDER_SIZE' }));
+  });
+
   it('renders exact nearest-neighbor blocks, with compositing and transparent edges preserved', () => {
     const doc = createDocument({ width: 3, height: 2, palette, layers: [{ id: 'body', name: 'Body' }, { id: 'weapon', name: 'Weapon' }, { id: 'hidden', name: 'Hidden' }] });
     doc.layers[0].pixels = [1, 0, 2, 0, 1, 0];

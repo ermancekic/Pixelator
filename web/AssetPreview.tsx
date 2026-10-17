@@ -1,23 +1,49 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { composite } from '../src/engine';
-import type { PixelDocument } from '../src/types';
+import type { PixelDocument, PixelLayer } from '../src/types';
 
-export function paint(canvas: HTMLCanvasElement, doc: PixelDocument) {
-  canvas.width = doc.width; canvas.height = doc.height;
+// Documents are immutable; keep only the current render so history does not retain pixel buffers.
+let cachedDocument: PixelDocument | undefined;
+let compositeData: ImageData | undefined;
+let layerData = new WeakMap<PixelLayer, ImageData>();
+
+export function paint(canvas: HTMLCanvasElement, doc: PixelDocument, layer?: PixelLayer) {
+  const scale = layer ? Math.min(1, 48 / Math.max(doc.width, doc.height)) : 1;
+  const width = Math.max(1, Math.round(doc.width * scale)), height = Math.max(1, Math.round(doc.height * scale));
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
   const context = canvas.getContext('2d');
-  if (context) { const data = context.createImageData(doc.width, doc.height); data.data.set(composite(doc)); context.putImageData(data, 0, 0); }
+  if (!context) return;
+  if (cachedDocument !== doc) { cachedDocument = doc; compositeData = undefined; layerData = new WeakMap(); }
+  let data = layer ? layerData.get(layer) : compositeData;
+  if (!data) {
+    data = context.createImageData(width, height);
+    if (layer) {
+      const colors = doc.palette.map(color => [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16), 255]);
+      // Sample thumbnail pixels directly to avoid full-size buffers for every layer.
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const index = layer.pixels[Math.floor((y + .5) * doc.height / height) * doc.width + Math.floor((x + .5) * doc.width / width)];
+        if (index !== 0) data.data.set(colors[index], (y * width + x) * 4);
+      }
+    } else data.data.set(composite(doc));
+    if (layer) layerData.set(layer, data); else compositeData = data;
+  }
+  context.putImageData(data, 0, 0);
 }
 
-export function Miniature({ doc, className = '' }: { doc: PixelDocument; className?: string }) {
+export const Miniature = memo(function Miniature({ doc, layer, className = '' }: { doc: PixelDocument; layer?: PixelLayer; className?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => { if (ref.current) paint(ref.current, doc); }, [doc]);
+  useEffect(() => { if (ref.current) paint(ref.current, doc, layer); }, [doc, layer]);
   return <canvas ref={ref} className={`miniature ${className}`} aria-label="Asset-Vorschau"/>;
-}
+});
 
-export function AssetPreview({ doc }: { doc?: PixelDocument }) {
+export const AssetPreview = memo(function AssetPreview({ doc }: { doc?: PixelDocument }) {
   const [scale, setScale] = useState(1);
   const [tiled, setTiled] = useState(false);
   const [background, setBackground] = useState('checker');
+  useEffect(() => () => {
+    if (cachedDocument === doc) { cachedDocument = undefined; compositeData = undefined; layerData = new WeakMap(); }
+  }, [doc]);
   return <section className="inspector-section preview-section">
     <div className="section-heading"><span>VORSCHAU</span><span className="muted">{scale * 100} %</span></div>
     <div className="preview-options">
@@ -31,4 +57,4 @@ export function AssetPreview({ doc }: { doc?: PixelDocument }) {
       </div> : <span className="muted">Kein Asset ausgewählt</span>}
     </div>
   </section>;
-}
+});

@@ -52,6 +52,67 @@ afterEach(async () => {
 });
 
 describe('local REST editing', () => {
+  it('deletes assets and projects through REST and returns safe errors for removed content', async () => {
+    const app = await open(); const { project, detail } = await setup(app);
+    const edited = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+    expect(edited.statusCode).toBe(200);
+    const variant = (await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/variant`, payload: { name: 'Retained variant' } })).json<AssetDetail>();
+    const deleted = await app.inject({ method: 'DELETE', url: `/api/assets/${detail.asset.id}` });
+    expect(deleted.statusCode, deleted.body).toBe(200);
+    expect(deleted.json()).toEqual({ id: detail.asset.id, projectId: project.id });
+    expect((await app.inject(`/api/assets/${variant.asset.id}`)).json<AssetDetail>().asset.sourceAssetId).toBeUndefined();
+    expect((await app.inject(`/api/assets?projectId=${project.id}`)).json<Asset[]>()).toHaveLength(1);
+    for (const suffix of ['', '/revisions', '/revisions?summary=true', `/revisions/${detail.revision.id}`, '/png', '/thumbnail', '/export']) {
+      const missing = await app.inject(`/api/assets/${detail.asset.id}${suffix}`);
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    }
+    const replay = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+    expect(replay.statusCode).toBe(404);
+    const removedProject = await app.inject({ method: 'DELETE', url: `/api/projects/${project.id}` });
+    expect(removedProject.statusCode, removedProject.body).toBe(200);
+    expect(removedProject.json()).toEqual({ id: project.id });
+    expect((await app.inject('/api/projects')).json()).toEqual([]);
+    expect((await app.inject(`/api/assets/${variant.asset.id}`)).statusCode).toBe(404);
+    expect((await app.inject({ method: 'DELETE', url: `/api/projects/${project.id}` })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'DELETE', url: `/api/assets/${detail.asset.id}` })).statusCode).toBe(404);
+  });
+
+  it('serves compact revision summaries and individual history while preserving the full history endpoint', async () => {
+    const app = await open(); const { detail } = await setup(app);
+    const painted = (await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) })).json<ApplyResult>();
+    const response = await app.inject(`/api/assets/${detail.asset.id}/revisions?summary=true`);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual([painted.revision, detail.revision].map(({ id, assetId, parentId, label, actor, createdAt }) => ({ id, assetId, parentId, label, actor, createdAt })));
+    expect((await app.inject(`/api/assets/${detail.asset.id}/revisions/${detail.revision.id}`)).json()).toEqual(detail.revision);
+    expect((await app.inject(`/api/assets/${detail.asset.id}/revisions`)).json()).toEqual([painted.revision, detail.revision]);
+    expect((await app.inject(`/api/assets/${detail.asset.id}/revisions?summary=false`)).json()).toEqual([painted.revision, detail.revision]);
+    expect((await app.inject(`/api/assets/${detail.asset.id}/revisions?summary=invalid`)).statusCode).toBe(400);
+    const foreign = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: detail.asset.projectId, name: 'Other', type: 'item' } })).json<AssetDetail>();
+    expect((await app.inject(`/api/assets/${foreign.asset.id}/revisions/${detail.revision.id}`)).json()).toMatchObject({ error: { code: 'WRONG_ASSET' } });
+  });
+
+  it('serves bounded thumbnails for large assets and the requested historical revision', async () => {
+    const app = await open(); const { project, detail: small } = await setup(app);
+    const detail = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Wide prop', type: 'prop', width: 384, height: 192 } })).json<AssetDetail>();
+    const edited = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: {
+      expectedRevision: detail.revision.id, requestId: 'thumbnail-paint', editScope: { layerIds: ['body'] },
+      operations: [{ op: 'rect', layerId: 'body', x: 0, y: 0, width: 384, height: 192, color: 1, filled: true }],
+    } });
+    expect(edited.statusCode, edited.body).toBe(200);
+    const response = await app.inject(`/api/assets/${detail.asset.id}/thumbnail`);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('image/png');
+    const thumbnail = PNG.sync.read(response.rawPayload);
+    expect([thumbnail.width, thumbnail.height]).toEqual([96, 48]);
+    expect([...thumbnail.data.subarray(0, 4)]).toEqual([15, 56, 15, 255]);
+    const original = PNG.sync.read((await app.inject(`/api/assets/${detail.asset.id}/thumbnail?revisionId=${detail.revision.id}`)).rawPayload);
+    expect(original.data.every(channel => channel === 0)).toBe(true);
+    const native = PNG.sync.read((await app.inject(`/api/assets/${small.asset.id}/thumbnail`)).rawPayload);
+    expect([native.width, native.height]).toEqual([8, 8]);
+    expect((await app.inject(`/api/assets/${small.asset.id}/thumbnail?revisionId=${detail.revision.id}`)).json()).toMatchObject({ error: { code: 'WRONG_ASSET' } });
+  });
+
   it('shares duplicate layers and composite/global fill through REST, MCP and project import', async () => {
     const app = await open(); const { project, detail } = await setup(app);
     const outline = await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: {
