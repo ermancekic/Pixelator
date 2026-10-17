@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDocument } from '../src/engine.js';
-import { paint } from '../web/AssetPreview.js';
+import { applyOperations, createDocument } from '../src/engine.js';
+import { onionPixels, paint } from '../web/AssetPreview.js';
 import { cel } from './helpers.js';
 
 function canvas() {
@@ -66,5 +66,32 @@ describe('asset preview rendering', () => {
     expect([native.element.width, native.element.height]).toEqual([2048, 1024]);
     expect(native.context.createImageData).toHaveBeenCalledWith(2048, 1024);
     expect(native.context.putImageData.mock.calls[0][0].data.some(Boolean)).toBe(false);
+  });
+});
+
+describe('frame-aware preview rendering', () => {
+  const animated = () => applyOperations(createDocument({ width: 2, height: 1, palette: ['#00000000', '#ff0000', '#0000ff'], frames: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }), [
+    { op: 'rows', layerId: 'base', frameId: 'a', x: 0, y: 0, rows: ['1.'] },
+    { op: 'rows', layerId: 'base', frameId: 'c', x: 0, y: 0, rows: ['.2'] },
+  ], { layerIds: ['base'] }).document;
+
+  it('renders the requested frame and bounded frame thumbnails from separate cache entries', () => {
+    const doc = animated();
+    const entry = canvas();
+    paint(entry.element, doc, { frameId: 'c' });
+    paint(entry.element, doc, { frameId: 'a' });
+    paint(entry.element, doc, { frameId: 'c' });
+    expect(entry.context.putImageData.mock.calls.map(call => [...call[0].data])).toEqual([[0, 0, 0, 0, 0, 0, 255, 255], [255, 0, 0, 255, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 255, 255]]);
+    expect(entry.context.createImageData).toHaveBeenCalledTimes(2);
+    const thumbnail = canvas();
+    paint(thumbnail.element, doc, { frameId: 'a', thumbnail: true });
+    expect([...thumbnail.context.putImageData.mock.calls[0][0].data]).toEqual([255, 0, 0, 255, 0, 0, 0, 0]);
+  });
+
+  it('draws previous frames blue and next frames red with opacity falling by distance', () => {
+    const doc = animated();
+    expect([...onionPixels(doc, 'b', { before: 1, after: 1 })]).toEqual([48, 96, 255, 153, 255, 64, 64, 153]);
+    expect([...onionPixels(doc, 'c', { before: 2, after: 0 })]).toEqual([48, 96, 255, 77, 0, 0, 0, 0]);
+    expect([...onionPixels(doc, 'a', { before: 3, after: 0 })]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
   });
 });

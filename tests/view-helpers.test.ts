@@ -101,4 +101,13 @@ describe('editor shortcuts', () => {
     expect(resolveShortcut({ key: 'Escape' })).toBe('cancel');
     expect(resolveShortcut({ key: 'Delete' })).toBe('delete');
   });
+
+  it('steps frames, toggles playback and onion skin without changing the ellipse key', () => {
+    expect(resolveShortcut({ key: ',' })).toBe('previous-frame');
+    expect(resolveShortcut({ key: '.' })).toBe('next-frame');
+    expect(resolveShortcut({ key: 'k' })).toBe('play');
+    expect(resolveShortcut({ key: 'O', shiftKey: true })).toBe('onion');
+    expect(resolveShortcut({ key: 'o' })).toBe('ellipse');
+    for (const key of [',', '.', 'k']) expect(resolveShortcut({ key }, true)).toBeNull();
+  });
 });
