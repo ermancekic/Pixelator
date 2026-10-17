@@ -115,7 +115,7 @@ export interface ArtistRun {
   createdAt: string;
   updatedAt: string;
 }
-export type McpAgent = 'claude' | 'codex';
+export type McpAgent = 'claude' | 'codex' | 'antigravity';
 export interface McpAgentStatus { connected: boolean; sessions: number; lastSeenAt: string | null }
 export interface McpStatus {
   running: boolean;

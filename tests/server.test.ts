@@ -353,23 +353,26 @@ describe('MCP transport', () => {
     expect([...png.data.subarray((5000 + 4999) * 4)]).toEqual([15, 56, 15, 255]);
   });
 
-  async function connect(app: FastifyInstance, name: string) {
-    const response = await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name, version: '1.0.0' } } } });
+  async function connect(app: FastifyInstance, name: string, protocolVersion = '2025-11-25') {
+    const response = await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion, capabilities: {}, clientInfo: { name, version: '1.0.0' } } } });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json().error).toBeUndefined();
     const sessionId = response.headers['mcp-session-id'];
     expect(sessionId).toEqual(expect.any(String));
-    return { ...mcpHeaders, 'mcp-session-id': sessionId as string };
+    expect(response.json().result.protocolVersion).toBe(protocolVersion);
+    return { ...mcpHeaders, 'mcp-protocol-version': protocolVersion, 'mcp-session-id': sessionId as string };
   }
 
-  it('tracks Claude and Codex independently, including multiple sessions and explicit disconnects', async () => {
+  it('tracks Claude, Codex and Antigravity independently, including multiple sessions and explicit disconnects', async () => {
     const app = await open();
     const claude = await connect(app, 'claude-code');
     const codex = await connect(app, 'codex-mcp-client');
     const secondCodex = await connect(app, 'Codex Desktop');
+    const antigravity = await connect(app, 'Antigravity IDE');
     expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents).toEqual({
       claude: { connected: true, sessions: 1, lastSeenAt: expect.any(String) },
       codex: { connected: true, sessions: 2, lastSeenAt: expect.any(String) },
+      antigravity: { connected: true, sessions: 1, lastSeenAt: expect.any(String) },
     });
     const initialized = await app.inject({ method: 'POST', url: '/mcp', headers: codex, payload: { jsonrpc: '2.0', method: 'notifications/initialized' } });
     expect(initialized.statusCode).toBe(202);
@@ -384,10 +387,36 @@ describe('MCP transport', () => {
     const disconnected = (await app.inject('/api/mcp/status')).json<McpStatus>().agents;
     expect(disconnected.codex).toMatchObject({ connected: false, sessions: 0, lastSeenAt: expect.any(String) });
     expect(disconnected.claude.connected).toBe(true);
+    expect(disconnected.antigravity.connected).toBe(true);
+    const { 'content-type': _antigravityContentType, ...antigravityDeleteHeaders } = antigravity;
+    expect((await app.inject({ method: 'DELETE', url: '/mcp', headers: antigravityDeleteHeaders })).statusCode).toBe(200);
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.antigravity).toMatchObject({ connected: false, sessions: 0, lastSeenAt: expect.any(String) });
     expect((await app.inject({ method: 'POST', url: '/api/mcp/stop' })).json<McpStatus>().agents.claude.connected).toBe(false);
     await app.inject({ method: 'POST', url: '/api/mcp/start' });
     expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.claude.connected).toBe(false);
     expect((await app.inject({ method: 'POST', url: '/mcp', headers: claude, payload: { jsonrpc: '2.0', id: 3, method: 'tools/list' } })).statusCode).toBe(404);
+  });
+
+  it.each(['2024-11-05', '2025-03-26', '2025-06-18'])('serves workflow, resources and PNG images to Antigravity over MCP %s', async protocolVersion => {
+    const app = await open(); const { detail } = await setup(app);
+    const headers = await connect(app, 'antigravity', protocolVersion);
+    const initialized = await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', method: 'notifications/initialized' } });
+    expect(initialized.statusCode).toBe(202);
+    const tools = await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', id: 2, method: 'tools/list' } });
+    expect(tools.json().result.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'get_workflow' }), expect.objectContaining({ name: 'inspect_asset' })]));
+    const workflow = await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_workflow', arguments: {} } } });
+    expect(workflow.json().result.isError).not.toBe(true);
+    expect(JSON.parse(workflow.json().result.content[0].text).artistGuide.uri).toBe('pixelator://artist-guide');
+    const resource = await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', id: 4, method: 'resources/read', params: { uri: 'pixelator://workflow' } } });
+    expect(resource.json().result.contents[0]).toMatchObject({ uri: 'pixelator://workflow', text: expect.stringContaining('Pixel Artist') });
+    const inspected = await app.inject({ method: 'POST', url: '/mcp', headers, payload: { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'inspect_asset', arguments: { assetId: detail.asset.id, scale: 1 } } } });
+    expect(inspected.json().result.isError).not.toBe(true);
+    const image = inspected.json().result.content.find((content: ToolResult['content'][number]) => content.type === 'image');
+    expect(image.mimeType).toBe('image/png');
+    expect(PNG.sync.read(Buffer.from(image.data, 'base64'))).toMatchObject({ width: 8, height: 8 });
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.antigravity).toMatchObject({ connected: true, sessions: 1 });
+    await app.inject({ method: 'POST', url: '/api/mcp/stop' });
+    expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents.antigravity).toMatchObject({ connected: false, sessions: 0 });
   });
 
   it('expires idle client sessions and refreshes the timeout on subsequent requests', async () => {
@@ -406,12 +435,13 @@ describe('MCP transport', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('does not mark an unknown client or a rejected initialization as Claude or Codex', async () => {
+  it('does not mark an unknown client or a rejected initialization as a supported agent', async () => {
     const app = await open();
     await connect(app, 'another-client');
     await app.inject({ method: 'POST', url: '/mcp', headers: mcpHeaders, payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude-code' } } } });
     expect((await app.inject('/api/mcp/status')).json<McpStatus>().agents).toEqual({
       claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null },
+      antigravity: { connected: false, sessions: 0, lastSeenAt: null },
     });
   });
 
@@ -457,7 +487,7 @@ describe('MCP transport', () => {
     const initialResponse = await app.inject('/api/mcp/status');
     expect(initialResponse.headers['cache-control']).toBe('no-store');
     const initial = initialResponse.json<McpStatus>();
-    expect(initial).toEqual({ running: true, endpoint: 'http://127.0.0.1:4317/mcp', startedAt: expect.any(String), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null, agents: { claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null } } });
+    expect(initial).toEqual({ running: true, endpoint: 'http://127.0.0.1:4317/mcp', startedAt: expect.any(String), requests: 0, toolCalls: 0, activeRequests: 0, lastRequestAt: null, agents: { claude: { connected: false, sessions: 0, lastSeenAt: null }, codex: { connected: false, sessions: 0, lastSeenAt: null }, antigravity: { connected: false, sessions: 0, lastSeenAt: null } } });
     await rpc(app, 'tools/list', {});
     await rpc(app, 'tools/call', { name: 'list_projects', arguments: {} });
     const beforeStop = (await app.inject('/api/mcp/status')).json<McpStatus>();

@@ -3,7 +3,7 @@ import type { CSSProperties, FormEvent, PointerEvent as ReactPointerEvent, React
 import { previewOperations } from '../src/engine';
 import { AssetPreview, Miniature, paint } from './AssetPreview';
 import { appendStroke, mirroredShapes, strokePixels } from './drawing-helpers';
-import { fitCanvas, MAX_ZOOM, MIN_ZOOM, panFromDrag, resolveShortcut, zoomAt } from './view-helpers';
+import { createPanPreview, fitCanvas, MAX_ZOOM, MIN_ZOOM, panFromDrag, panTransform, resolveShortcut, zoomAt } from './view-helpers';
 import type { CanvasView, Point, Tool } from './view-helpers';
 import type { ApplyResult, Asset, AssetDetail, AssetType, EditScope, McpStatus, Operation, PixelDocument, PixelStyle, Project, ProjectStyle, Rect, Revision, RevisionSummary } from '../src/types';
 
@@ -80,11 +80,11 @@ export default function App() {
   const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null); const [mcpBusy, setMcpBusy] = useState(false); const [mcpError, setMcpError] = useState(''); const [mcpNow, setMcpNow] = useState(Date.now);
   const [newName, setNewName] = useState(''); const [newType, setNewType] = useState<AssetType>('character'); const [newSize, setNewSize] = useState({ width: 32, height: 32 });
   const [newPreset, setNewPreset] = useState<PixelStyle>('16-bit'); const [prompt, setPrompt] = useState(''); const [paletteText, setPaletteText] = useState(''); const [colorDraft, setColorDraft] = useState('');
-  const canvasRef = useRef<HTMLCanvasElement>(null); const stageRef = useRef<HTMLDivElement>(null); const modalRef = useRef<HTMLElement>(null); const fileRef = useRef<HTMLInputElement>(null); const projectFileRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null); const artboardRef = useRef<HTMLDivElement>(null); const stageRef = useRef<HTMLDivElement>(null); const modalRef = useRef<HTMLElement>(null); const fileRef = useRef<HTMLInputElement>(null); const projectFileRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false); const loadingRef = useRef(loading); const detailRef = useRef(detail); const projectIdRef = useRef(projectId); const assetLoadId = useRef(0); const assetListRequestId = useRef(0); const historyRequestId = useRef(0); const attemptedAutoOpen = useRef('');
   const stroke = useRef<{ pointerId: number; start: Point; last: Point; base: PixelDocument; points: Point[]; operations: Operation[]; scope: EditScope; tool: Tool; copy: boolean; previousSelection: Rect | null; layerId: string; color: number; filled: boolean; mirrorX: boolean; mirrorY: boolean; pixelPerfect: boolean } | null>(null);
   const spaceHeldRef = useRef(false); const viewRef = useRef(view); const dialogRef = useRef(dialog); const modalTriggerRef = useRef<HTMLElement | null>(null);
-  const panDrag = useRef<{ pointerId: number; start: Point; pan: Point } | null>(null);
+  const panDrag = useRef<{ pointerId: number; start: Point; pan: Point; preview: ReturnType<typeof createPanPreview> } | null>(null);
   const previewFrame = useRef<number | null>(null); const previewPoint = useRef<Point | null>(null);
   const openingAssetId = useRef('');
   viewRef.current = view; dialogRef.current = dialog;
@@ -104,7 +104,7 @@ export default function App() {
     const draw = stroke.current; stroke.current = null;
     if (draw) { setPreview(null); if (draw.tool === 'selection') setSelection(draw.previousSelection); if (canvasRef.current?.hasPointerCapture(draw.pointerId)) canvasRef.current.releasePointerCapture(draw.pointerId); }
     const pan = panDrag.current; panDrag.current = null;
-    if (pan) { setPanning(false); if (stageRef.current?.hasPointerCapture(pan.pointerId)) stageRef.current.releasePointerCapture(pan.pointerId); }
+    if (pan) { const position = pan.preview.finish(); setView(current => ({ ...current, pan: position })); setPanning(false); if (stageRef.current?.hasPointerCapture(pan.pointerId)) stageRef.current.releasePointerCapture(pan.pointerId); }
   }, []);
   const clearEditor = useCallback(() => {
     cancelInteraction(); ++assetLoadId.current; ++historyRequestId.current;
@@ -255,7 +255,7 @@ export default function App() {
     const reset = () => { spaceHeldRef.current = false; setSpaceHeld(false); cancelInteraction(); };
     const visibility = () => { if (window.document.hidden) reset(); };
     window.addEventListener('blur', reset); window.document.addEventListener('visibilitychange', visibility);
-    return () => { window.removeEventListener('blur', reset); window.document.removeEventListener('visibilitychange', visibility); };
+    return () => { window.removeEventListener('blur', reset); window.document.removeEventListener('visibilitychange', visibility); cancelInteraction(); };
   }, []);
   useEffect(() => {
     const stage = stageRef.current; if (!stage) return;
@@ -285,16 +285,16 @@ export default function App() {
     };
   }, [dialog]);
   const startPan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!document || loading || dialog || panDrag.current || !event.isPrimary || !(event.button === 1 || (event.button === 0 && (spaceHeldRef.current || tool === 'pan')))) return;
+    if (!document || !artboardRef.current || loading || dialog || panDrag.current || !event.isPrimary || !(event.button === 1 || (event.button === 0 && (spaceHeldRef.current || tool === 'pan')))) return;
     event.preventDefault(); event.stopPropagation(); cancelInteraction();
-    panDrag.current = { pointerId: event.pointerId, start: { x: event.clientX, y: event.clientY }, pan: viewRef.current.pan };
+    panDrag.current = { pointerId: event.pointerId, start: { x: event.clientX, y: event.clientY }, pan: viewRef.current.pan, preview: createPanPreview(artboardRef.current, viewRef.current.pan) };
     event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus({ preventScroll: true }); setPanning(true); setCursor(null);
   };
   const movePan = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = panDrag.current; if (!drag || drag.pointerId !== event.pointerId) return;
-    event.preventDefault(); setView(current => ({ ...current, pan: panFromDrag(drag.pan, drag.start, { x: event.clientX, y: event.clientY }) }));
+    event.preventDefault(); drag.preview.move(panFromDrag(drag.pan, drag.start, { x: event.clientX, y: event.clientY }));
   };
-  const endPan = (event: ReactPointerEvent<HTMLDivElement>) => { if (panDrag.current?.pointerId === event.pointerId) cancelInteraction(); };
+  const endPan = (event: ReactPointerEvent<HTMLDivElement>) => { if (panDrag.current?.pointerId === event.pointerId) { if (event.type === 'pointerup') movePan(event); cancelInteraction(); } };
   const position = (event: ReactPointerEvent<HTMLCanvasElement>): Point => { const rect = event.currentTarget.getBoundingClientRect(); return { x: Math.max(0, Math.min(document!.width - 1, Math.floor((event.clientX - rect.left) / rect.width * document!.width))), y: Math.max(0, Math.min(document!.height - 1, Math.floor((event.clientY - rect.top) / rect.height * document!.height))) }; };
   const previewStroke = (end: Point) => {
     const current = stroke.current; if (!current) return;
@@ -425,14 +425,14 @@ export default function App() {
         {viewingPast && <div className="alert past"><span>Versionsvorschau · {viewRevision.label}</span><button onClick={() => setViewRevision(null)}>Zur aktuellen Version</button><button onClick={() => void restore(viewRevision.id)} disabled={busy || loading}>Wiederherstellen</button></div>}
         <div className="canvas-workspace"><div className="tool-rail" role="toolbar" aria-label="Zeichenwerkzeuge">{tools.map(t => <IconButton key={t.id} icon={t.icon} label={`${t.label} (${t.key})`} active={tool === t.id} onClick={() => setTool(t.id)} disabled={!detail}><span className="tool-key">{t.key}</span></IconButton>)}<span className="rail-divider"/><div className={`current-color${color === 0 ? ' checker' : ''}`} style={{ '--swatch': document?.palette[color] ?? '#abc887' } as CSSProperties} title={`Aktive Farbe ${color}`}/></div>
           <div ref={stageRef} className={`canvas-stage tool-${tool}${spaceHeld || tool === 'pan' ? ' pan-ready' : ''}${panning ? ' is-panning' : ''}`} tabIndex={0} role="region" aria-label="Zeichenfläche" onPointerDownCapture={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onLostPointerCapture={endPan} onAuxClick={event => { if (event.button === 1) event.preventDefault(); }}>
-            {document ? <><div className={`canvas-artboard checker${grid && zoom >= 4 ? ' show-grid' : ''}`} style={{ width: document.width * zoom, height: document.height * zoom, transform: `translate(calc(-50% + ${view.pan.x}px), calc(-50% + ${view.pan.y}px))`, '--pixel-size': `${zoom}px` } as CSSProperties}>
+            {document ? <><div ref={artboardRef} className={`canvas-artboard checker${grid && zoom >= 4 ? ' show-grid' : ''}`} style={{ width: document.width * zoom, height: document.height * zoom, transform: panTransform(view.pan), '--pixel-size': `${zoom}px` } as CSSProperties}>
               <canvas ref={canvasRef} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={event => { if (stroke.current?.pointerId === event.pointerId) cancelInteraction(); }} onLostPointerCapture={event => { if (stroke.current?.pointerId === event.pointerId) cancelInteraction(); }} onPointerLeave={() => !stroke.current && setCursor(null)} aria-label={`${detail?.asset.name ?? 'Asset'}, ${document.width} mal ${document.height} Pixel. ${tools.find(t => t.id === tool)?.label} aktiv.`}/>
               {selection && <div className="selection-overlay" style={{ left: selection.x * zoom, top: selection.y * zoom, width: selection.width * zoom, height: selection.height * zoom }}/>}</div><div className="canvas-hint"><kbd>Leertaste</kbd> + Ziehen <span>·</span> Mausrad: Zoom {selection && <><span>·</span><kbd>Esc</kbd> Auswahl aufheben</>}</div></> : <div className="studio-empty"><span className="empty-canvas"><i/><i/><i/><i/><Icon name="spark" size={36}/></span><h2>Kein Asset ausgewählt</h2><button className="button primary" onClick={() => openDialog(project ? 'asset' : 'project')}><Icon name="plus"/> {project ? 'Asset erstellen' : 'Projekt erstellen'}</button></div>}
             {loading && <div className="loading-overlay" role="status"><span className="spinner"/> Laden …</div>}
           </div>
         </div>
         <div className="canvas-status"><span><span className={`status-dot${busy ? ' saving' : ''}`}/>{busy ? 'Wird gespeichert …' : preview ? 'Zeichnen …' : detail ? 'Gespeichert' : 'Bereit'}</span><span>{cursor ? `X ${cursor.x} · Y ${cursor.y}` : 'X — · Y —'}<i/>{document?.layers.length ?? 0} Ebenen<i/>{validation?.colorCount ?? 0} Farben</span></div>
-        <section className="agent-panel" aria-label="KI-Agenten-Auftrag"><div className="agent-panel-content"><div><h2>Agenten-Auftrag</h2></div><p>Auftrag kopieren und in Codex oder Claude einfügen.</p><div className="agent-input"><input aria-label="Auftrag für deinen KI-Agenten" placeholder="z. B. Schwert um 3 Pixel verlängern" value={prompt} onChange={e => setPrompt(e.target.value)} disabled={!detail}/><button onClick={() => void copyOrder()} disabled={!detail}><Icon name="copy" size={15}/> Auftrag kopieren</button></div></div></section>
+        <section className="agent-panel" aria-label="KI-Agenten-Auftrag"><div className="agent-panel-content"><div><h2>Agenten-Auftrag</h2></div><p>Auftrag kopieren und in Codex, Claude oder Antigravity einfügen.</p><div className="agent-input"><input aria-label="Auftrag für deinen KI-Agenten" placeholder="z. B. Schwert um 3 Pixel verlängern" value={prompt} onChange={e => setPrompt(e.target.value)} disabled={!detail}/><button onClick={() => void copyOrder()} disabled={!detail}><Icon name="copy" size={15}/> Auftrag kopieren</button></div></div></section>
       </section>
       <aside className="inspector" aria-label="Eigenschaften">
         <AssetPreview doc={document}/>
@@ -462,9 +462,9 @@ export default function App() {
         <div className="mcp-heading"><span className="document-icon"><Icon name="server" size={22}/></span><div><h2 id="mcp-title">MCP-Server</h2><p>Deine Verbindung zum Pixel Artist</p></div><IconButton icon="close" label="MCP-Fenster schließen" autoFocus onClick={() => setDialog(null)}/></div>
         <div className="mcp-connection"><span>Serverstatus</span><span className={`connection${connected && mcpStatus?.running ? '' : ' offline'}`} role="status"><i/>{mcpLabel}</span></div>
         <div className="mcp-connection"><span>Editor-Verbindung</span><span className={`connection${connected ? '' : ' offline'}`}><i/>{connected ? 'Verbunden' : 'Unterbrochen'}</span></div>
-        <section className="mcp-agents" aria-label="Agenten-Verbindungen">{(['claude', 'codex'] as const).map(id => {
+        <section className="mcp-agents" aria-label="Agenten-Verbindungen">{(['claude', 'codex', 'antigravity'] as const).map(id => {
           const agent = mcpStatus?.agents?.[id]; const live = connected && mcpStatus?.running && agent?.connected;
-          return <div className="mcp-agent" key={id}><div><strong>{id === 'claude' ? 'Claude' : 'Codex'}</strong><small>{agent?.lastSeenAt ? `Letzter Kontakt: ${new Date(agent.lastSeenAt).toLocaleTimeString('de-DE')}` : 'Noch kein Kontakt'}</small></div><span className={`connection${live ? '' : ' offline'}`} role="status"><i/>{!connected || !agent ? 'Unbekannt' : live ? 'Verbunden' : 'Nicht verbunden'}</span></div>;
+          return <div className="mcp-agent" key={id}><div><strong>{id === 'claude' ? 'Claude' : id === 'codex' ? 'Codex' : 'Antigravity'}</strong><small>{agent?.lastSeenAt ? `Letzter Kontakt: ${new Date(agent.lastSeenAt).toLocaleTimeString('de-DE')}` : 'Noch kein Kontakt'}</small></div><span className={`connection${live ? '' : ' offline'}`} role="status"><i/>{!connected || !agent ? 'Unbekannt' : live ? 'Verbunden' : 'Nicht verbunden'}</span></div>;
         })}</section>
         {mcpError && <p className="form-error" role="alert">{mcpError}</p>}
         <div className="mcp-actions"><button className="button primary" disabled={!connected || !mcpStatus || mcpStatus.running || mcpBusy} onClick={() => void controlMcp('start')}><Icon name="play" size={15}/>Start</button><button className="button mcp-stop" disabled={!connected || !mcpStatus?.running || mcpBusy} onClick={() => void controlMcp('stop')}><Icon name="stop" size={14}/>Stopp</button>{mcpBusy && <span role="status">Wird umgeschaltet …</span>}</div>
