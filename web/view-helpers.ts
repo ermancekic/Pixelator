@@ -1,6 +1,6 @@
 export type Point = { x: number; y: number };
 export type CanvasView = { zoom: number; pan: Point };
-export type Tool = 'pencil' | 'eraser' | 'fill' | 'eyedropper' | 'line' | 'rect' | 'ellipse' | 'selection' | 'move' | 'pan';
+export type Tool = 'pencil' | 'eraser' | 'shade' | 'fill' | 'eyedropper' | 'line' | 'rect' | 'ellipse' | 'polygon' | 'selection' | 'lasso' | 'wand' | 'move' | 'pan';
 export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 24;
 
@@ -18,6 +18,9 @@ export function fitCanvas(width: number, height: number, viewportWidth: number, 
 export function panFromDrag(pan: Point, start: Point, end: Point): Point {
   return { x: pan.x + end.x - start.x, y: pan.y + end.y - start.y };
 }
+
+/** Offset of the old canvas inside a resized one for an anchor column/row: 0 start, 1 center, 2 end. */
+export const anchorOffset = (anchor: number, oldSize: number, newSize: number) => anchor === 0 ? 0 : anchor === 1 ? Math.floor((newSize - oldSize) / 2) : newSize - oldSize;
 
 export const panTransform = (pan: Point) => `translate3d(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px), 0)`;
 
@@ -40,15 +43,23 @@ export function createPanPreview(artboard: HTMLElement, initialPan: Point) {
 }
 
 type ShortcutEvent = { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; isComposing?: boolean };
-type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start' | 'previous-frame' | 'next-frame' | 'play' | 'onion';
-const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', v: 'selection', m: 'move', h: 'pan' };
+type Shortcut = Tool | 'undo' | 'redo' | 'export' | 'zoom-in' | 'zoom-out' | 'fit' | 'actual-size' | 'grid' | 'help' | 'cancel' | 'delete' | 'pan-start' | 'previous-frame' | 'next-frame' | 'play' | 'onion'
+  | 'select-all' | 'deselect' | 'copy' | 'copy-merged' | 'cut' | 'paste' | 'paste-layer' | 'swap-colors' | 'brush-smaller' | 'brush-larger' | 'commit';
+const toolKeys: Record<string, Tool> = { p: 'pencil', e: 'eraser', s: 'shade', g: 'fill', i: 'eyedropper', l: 'line', r: 'rect', o: 'ellipse', u: 'polygon', v: 'selection', q: 'lasso', w: 'wand', m: 'move', h: 'pan' };
 export function resolveShortcut(event: ShortcutEvent, blocked = false): Shortcut | null {
   if (blocked || event.isComposing || event.altKey) return null;
   const key = event.key.toLowerCase();
   if (event.ctrlKey || event.metaKey) {
     if (key === 'z') return event.shiftKey ? 'redo' : 'undo';
-    return key === 'y' ? 'redo' : key === 's' ? 'export' : null;
+    if (key === 'c') return event.shiftKey ? 'copy-merged' : 'copy';
+    if (key === 'v') return event.shiftKey ? 'paste-layer' : 'paste';
+    return key === 'y' ? 'redo' : key === 's' ? 'export' : key === 'a' ? 'select-all' : key === 'd' ? 'deselect' : key === 'x' ? 'cut' : null;
   }
+  if (key === 'enter') return 'commit';
+  if (key === 'x') return 'swap-colors';
+  // [ and ] need AltGr on German keyboards, which reads as Ctrl+Alt; < and > work there.
+  if (key === '[' || key === '<') return 'brush-smaller';
+  if (key === ']' || key === '>') return 'brush-larger';
   if (key === ' ') return 'pan-start';
   if (key === '?') return 'help';
   if (key === 'escape') return 'cancel';

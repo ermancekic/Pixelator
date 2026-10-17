@@ -70,6 +70,18 @@ function tagIssues(tags: unknown, frameCount: number): Issue[] {
   return [];
 }
 
+const rgbOf = (hex: string) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+/** Index of the opaque palette color closest to hex, weighted for perceived brightness; never the transparent index 0. */
+export function nearestColor(hex: string, palette: string[]): number {
+  const [r, g, b] = rgbOf(hex); let best = 1; let distance = Infinity;
+  for (let i = 1; i < palette.length; i++) {
+    const [pr, pg, pb] = rgbOf(palette[i]);
+    const d = 2 * (pr - r) ** 2 + 4 * (pg - g) ** 2 + 3 * (pb - b) ** 2;
+    if (d < distance) { distance = d; best = i; }
+  }
+  return best;
+}
+
 const normalizeTag = (tag: AnimationTagInput): AnimationTag => ({ name: tag.name, from: tag.from, to: tag.to, direction: tag.direction ?? 'forward', loop: tag.loop ?? true });
 
 /** Pixelorama's rule: a frame inserted inside a tag or directly after its last frame extends it; earlier frames shift it. */
@@ -303,13 +315,17 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     frames: original.frames.map(frame => ({ ...frame, cels: Object.fromEntries(Object.entries(frame.cels).map(([id, pixels]) => [id, pixels.slice()])) })),
     tags: original.tags.map(tag => ({ ...tag })),
   };
-  const cells = doc.width * doc.height;
-  const canvas: Rect = { x: 0, y: 0, width: doc.width, height: doc.height };
+  // resize_canvas replaces both for the rest of the batch.
+  let cells = doc.width * doc.height;
+  let canvas: Rect = { x: 0, y: 0, width: doc.width, height: doc.height };
   const rect = (value: unknown): Rect => {
     requireValue(object(value) && integer(value.x) && integer(value.y) && integer(value.width) && integer(value.height) && value.width >= 1 && value.height >= 1 && value.x >= 0 && value.y >= 0 && value.x + value.width <= doc.width && value.y + value.height <= doc.height, 'INVALID_RECT', 'Rectangle must have positive integer dimensions inside the canvas.');
     return value as unknown as Rect;
   };
   const scopeRect = editScope.rect === undefined ? undefined : rect(editScope.rect);
+  requireValue(editScope.mask === undefined || (scopeRect && Array.isArray(editScope.mask) && editScope.mask.length === scopeRect.height && editScope.mask.every(row => typeof row === 'string' && row.length === scopeRect.width && /^[.#]+$/.test(row))), 'INVALID_SCOPE', 'mask needs rect and one row of # (writable) and . (protected) per rect row.');
+  const scopeMask = editScope.mask;
+  const writable = (x: number, y: number) => !scopeRect || (inside(scopeRect, x, y) && (!scopeMask || scopeMask[y - scopeRect.y][x - scopeRect.x] === '#'));
   const allowedLayers = new Set(editScope.layerIds);
   requireValue(editScope.layerIds.every(id => doc.layers.some(layer => layer.id === id)), 'INVALID_SCOPE', 'Scope contains an unknown layer.');
   const allowedFrames = editScope.frameIds === undefined ? null : new Set(editScope.frameIds);
@@ -372,7 +388,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     }
     const index = y * doc.width + x;
     if (target.pixels[index] === value) return;
-    requireValue(!scopeRect || inside(scopeRect, x, y), 'SCOPE_VIOLATION', 'Operation changes pixels outside the edit rectangle.');
+    requireValue(writable(x, y), 'SCOPE_VIOLATION', 'Operation changes pixels outside the edit rectangle or mask.');
     target.pixels[index] = value;
   };
   const line = (target: Raster, x1: number, y1: number, x2: number, y2: number, value: number) => {
@@ -443,6 +459,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       }
       case 'polygon': {
         const target = raster(operation.layerId, operation.frameId); const value = color(operation.color);
+        requireValue(operation.filled === undefined || typeof operation.filled === 'boolean', 'INVALID_OPERATION', 'filled must be boolean.');
         requireValue(Array.isArray(operation.points) && operation.points.length >= 3 && operation.points.length <= 128, 'INVALID_POINTS', 'Polygons need 3..128 vertices.');
         const points = Array.from(operation.points, point => {
           requireValue(Array.isArray(point) && point.length === 2, 'INVALID_POINTS', 'A polygon vertex must contain x, y.');
@@ -452,7 +469,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         });
         const minX = Math.min(...points.map(point => point[0])); const maxX = Math.max(...points.map(point => point[0]));
         const minY = Math.min(...points.map(point => point[1])); const maxY = Math.max(...points.map(point => point[1]));
-        for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
+        if (operation.filled !== false) for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
           let selected = false;
           for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
             const [xi, yi] = points[i]; const [xj, yj] = points[j];
@@ -472,14 +489,14 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireValue(operation.contiguous === undefined || typeof operation.contiguous === 'boolean', 'INVALID_OPERATION', 'contiguous must be boolean.');
         const x = coordinate(operation.x); const y = coordinate(operation.y);
         requireValue(inside(canvas, x, y), 'OUT_OF_BOUNDS', 'Fill start must be inside the canvas.');
-        requireValue(!scopeRect || inside(scopeRect, x, y), 'SCOPE_VIOLATION', 'Fill start must be inside the edit rectangle.');
+        requireValue(writable(x, y), 'SCOPE_VIOLATION', 'Fill start must be inside the edit rectangle or mask.');
         const source = operation.reference === 'composite' ? compositeIndices(doc, target.frame) : target.pixels;
         const from = source[y * doc.width + x];
         if (from === value && operation.reference !== 'composite') break;
         if (operation.contiguous === false) {
           const area = scopeRect ?? canvas;
           for (let py = area.y; py < area.y + area.height; py++) for (let px = area.x; px < area.x + area.width; px++) {
-            if (source[py * doc.width + px] === from) write(target, px, py, value);
+            if (source[py * doc.width + px] === from && writable(px, py)) write(target, px, py, value);
           }
           break;
         }
@@ -487,7 +504,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         const queue: number[] = [];
         const seen = operation.reference === 'composite' ? new Uint8Array(source.length) : undefined;
         const enqueue = (position: number) => {
-          if (source[position] !== from || seen?.[position]) return;
+          if (source[position] !== from || seen?.[position] || !writable(position % doc.width, Math.floor(position / doc.width))) return;
           if (seen) seen[position] = 1;
           write(target, position % doc.width, Math.floor(position / doc.width), value);
           queue.push(position);
@@ -543,18 +560,23 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         const target = raster(operation.layerId, operation.frameId); const from = color(operation.from); const to = color(operation.to);
         const area = operation.rect === undefined ? scopeRect ?? canvas : rect(operation.rect);
         for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) {
-          if (target.pixels[y * doc.width + x] === from) write(target, x, y, to);
+          if (target.pixels[y * doc.width + x] === from && writable(x, y)) write(target, x, y, to);
         }
         break;
       }
       case 'outline': {
-        const target = raster(operation.layerId, operation.frameId); const value = color(operation.color); const source = target.pixels.slice();
+        const target = raster(operation.layerId, operation.frameId); const value = color(operation.color);
         requireValue(value !== 0, 'INVALID_COLOR', 'Outline must use an opaque color.');
-        for (let y = 0; y < doc.height; y++) for (let x = 0; x < doc.width; x++) {
-          if (source[y * doc.width + x]) continue;
+        requireValue(operation.reference === undefined || operation.reference === 'layer' || operation.reference === 'composite', 'INVALID_OPERATION', 'Outline reference must be layer or composite.');
+        requireValue(operation.corners === undefined || typeof operation.corners === 'boolean', 'INVALID_OPERATION', 'corners must be boolean.');
+        // The outline grows around the reference shape and stays inside the rect, edit rectangle and mask.
+        const source = operation.reference === 'composite' ? compositeIndices(doc, target.frame) : target.pixels.slice();
+        const area = operation.rect === undefined ? canvas : rect(operation.rect); const corners = operation.corners ?? true;
+        for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) {
+          if (source[y * doc.width + x] || target.pixels[y * doc.width + x] || !writable(x, y)) continue;
           let neighbor = false;
           for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            if (inside(canvas, x + dx, y + dy) && source[(y + dy) * doc.width + x + dx]) neighbor = true;
+            if ((corners || !dx || !dy) && inside(canvas, x + dx, y + dy) && source[(y + dy) * doc.width + x + dx]) neighbor = true;
           }
           if (neighbor) write(target, x, y, value);
         }
@@ -596,6 +618,49 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireLayerChanges();
         requireValue(Array.isArray(operation.layerIds) && operation.layerIds.length === doc.layers.length && new Set(operation.layerIds).size === doc.layers.length && operation.layerIds.every(id => doc.layers.some(layer => layer.id === id)), 'INVALID_LAYERS', 'Reorder must contain every layer exactly once.');
         doc.layers = operation.layerIds.map(id => doc.layers.find(layer => layer.id === id)!);
+        break;
+      }
+      case 'merge_layers': {
+        requireLayerChanges();
+        requireValue(Array.isArray(operation.layerIds) && operation.layerIds.length >= 2 && new Set(operation.layerIds).size === operation.layerIds.length, 'INVALID_LAYERS', 'Merging needs at least two different layers.');
+        const merged = operation.layerIds.map(id => layerFor(id));
+        requireValue(merged.every(layer => layer.visible), 'INVALID_LAYERS', 'Only visible layers can be merged.');
+        const positions = merged.map(layer => doc.layers.indexOf(layer)).sort((a, b) => a - b);
+        // A visible layer between the merged ones would change the rendered image once its neighbors collapse.
+        requireValue(doc.layers.slice(positions[0], positions.at(-1)! + 1).every(layer => !layer.visible || operation.layerIds.includes(layer.id)), 'INVALID_LAYERS', 'Visible layers between merged layers must be merged as well.');
+        const target = doc.layers[positions[0]]; const sources = positions.slice(1).map(index => doc.layers[index]);
+        for (const frame of doc.frames) {
+          const pixels = frame.cels[target.id];
+          for (const layer of sources) {
+            const upper = frame.cels[layer.id];
+            for (let i = 0; i < cells; i++) if (upper[i]) pixels[i] = upper[i];
+            delete frame.cels[layer.id];
+          }
+        }
+        doc.layers = doc.layers.filter(layer => !sources.includes(layer));
+        break;
+      }
+      case 'resize_canvas': {
+        requireLayerChanges();
+        const width = operation.width; const height = operation.height;
+        requireValue(integer(width) && width >= 1 && integer(height) && height >= 1 && integer(width * height), 'INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
+        const dx = coordinate(operation.offsetX ?? 0); const dy = coordinate(operation.offsetY ?? 0);
+        const target: Rect = { x: 0, y: 0, width, height };
+        for (const frame of doc.frames) {
+          for (const layer of doc.layers) {
+            const source = frame.cels[layer.id]; const pixels = new Array(width * height).fill(0);
+            for (let i = 0; i < source.length; i++) {
+              if (!source[i]) continue;
+              const x = i % doc.width + dx; const y = Math.floor(i / doc.width) + dy;
+              if (inside(target, x, y)) pixels[y * width + x] = source[i];
+              else requireValue(!layer.locked, 'LAYER_LOCKED', `Cropping would remove pixels of locked layer ${layer.id}.`);
+            }
+            frame.cels[layer.id] = pixels;
+          }
+        }
+        doc.width = width; doc.height = height;
+        doc.pivot = { x: Math.max(0, Math.min(width, doc.pivot.x + dx)), y: Math.max(0, Math.min(height, doc.pivot.y + dy)) };
+        cells = width * height; canvas = target;
         break;
       }
       case 'add_frame': {
@@ -645,10 +710,14 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireValue(!doc.paletteLocked, 'PALETTE_LOCKED', 'This asset palette is locked.');
         const issues = paletteIssues(operation.colors, doc.maxColors);
         requireValue(!issues.length, 'INVALID_PALETTE', issues[0]?.message ?? 'Invalid palette.');
+        requireValue(operation.remap === undefined || operation.remap === 'index' || operation.remap === 'nearest', 'INVALID_OPERATION', 'Palette remap must be index or nearest.');
+        // index keeps every pixel's index; nearest moves each color to the closest color of the new palette.
+        const mapping = doc.palette.map((hex, index) => operation.remap !== 'nearest' || index === 0 ? index : nearestColor(hex, operation.colors));
         for (const layer of doc.layers) {
           if (!layer.locked) continue;
-          for (const frame of doc.frames) requireValue(frame.cels[layer.id].every(index => doc.palette[index].toUpperCase() === operation.colors[index]?.toUpperCase()), 'LAYER_LOCKED', `Palette would change locked layer ${layer.id}.`);
+          for (const frame of doc.frames) requireValue(frame.cels[layer.id].every(index => doc.palette[index].toUpperCase() === operation.colors[mapping[index]]?.toUpperCase()), 'LAYER_LOCKED', `Palette would change locked layer ${layer.id}.`);
         }
+        if (operation.remap === 'nearest') for (const frame of doc.frames) for (const layer of doc.layers) frame.cels[layer.id] = frame.cels[layer.id].map(index => mapping[index]);
         doc.palette = [...operation.colors];
         break;
       }
@@ -668,12 +737,16 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
   }
   const validation = validateDocument(doc);
   requireValue(validation.valid, validation.issues[0]?.code ?? 'INVALID_DOCUMENT', validation.issues[0]?.message ?? 'Invalid operation result.');
-  return { document: doc, diff: diffDocuments(original, doc, { layers: allowedLayers, frames: allowedFrames, rect: scopeRect }), validation };
+  return { document: doc, diff: diffDocuments(original, doc, { layers: allowedLayers, frames: allowedFrames, writable }), validation };
 }
 
 /** Compares two valid documents and enforces that every changed pixel lies inside the write scope. */
-function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { layers: Set<string>; frames: Set<string> | null; rect?: Rect }): PixelDiff {
+function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { layers: Set<string>; frames: Set<string> | null; writable: (x: number, y: number) => boolean }): PixelDiff {
   const cells = doc.width * doc.height;
+  if (original.width !== doc.width || original.height !== doc.height) {
+    // A resized canvas was authorized by resize_canvas, which requires full scope; every remaining pixel counts as changed.
+    return { changedPixels: cells * doc.frames.length, changedLayers: doc.layers.map(layer => layer.id), changedFrames: doc.frames.map(frame => frame.id), boundingBox: { x: 0, y: 0, width: doc.width, height: doc.height } };
+  }
   const beforePalette = original.palette.map(color => color.toUpperCase()); const afterPalette = doc.palette.map(color => color.toUpperCase());
   const layerIds = [...new Set([...original.layers.map(layer => layer.id), ...doc.layers.map(layer => layer.id)])];
   const frameIds = [...new Set([...original.frames.map(frame => frame.id), ...doc.frames.map(frame => frame.id)])];
@@ -695,7 +768,7 @@ function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { lay
     for (let i = 0; i < cells; i++) {
       const a = before ? beforePalette[before[i]] : beforePalette[0]; const b = after ? afterPalette[after[i]] : afterPalette[0];
       if (a === b) continue;
-      if (checked) requireValue(writable && (!scope.rect || inside(scope.rect, i % doc.width, Math.floor(i / doc.width))), 'SCOPE_VIOLATION', 'Rendered pixels changed outside the edit scope.');
+      if (checked) requireValue(writable && scope.writable(i % doc.width, Math.floor(i / doc.width)), 'SCOPE_VIOLATION', 'Rendered pixels changed outside the edit scope.');
       marks[i] = 1;
     }
     for (const layerId of layerIds) {
@@ -704,7 +777,7 @@ function diffDocuments(original: PixelDocument, doc: PixelDocument, scope: { lay
         const a = oldPixels?.[i] ?? 0; const b = newPixels?.[i] ?? 0;
         if (a === b && original.palette[a] === doc.palette[b]) continue;
         changedLayers.add(layerId); marks[i] = 1;
-        if (checked) requireValue(scope.layers.has(layerId) && writable && (!scope.rect || inside(scope.rect, i % doc.width, Math.floor(i / doc.width))), 'SCOPE_VIOLATION', 'Stored pixels changed outside the edit scope.');
+        if (checked) requireValue(scope.layers.has(layerId) && writable && scope.writable(i % doc.width, Math.floor(i / doc.width)), 'SCOPE_VIOLATION', 'Stored pixels changed outside the edit scope.');
       }
     }
     for (let i = 0; i < cells; i++) if (marks[i]) { changedPixels++; union[i] = 1; frameChanged = true; }

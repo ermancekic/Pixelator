@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createPanPreview, fitCanvas, MAX_ZOOM, MIN_ZOOM, panFromDrag, resolveShortcut, zoomAt } from '../web/view-helpers.js';
+import { anchorOffset, createPanPreview, fitCanvas, MAX_ZOOM, MIN_ZOOM, panFromDrag, resolveShortcut, zoomAt } from '../web/view-helpers.js';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -109,5 +109,27 @@ describe('editor shortcuts', () => {
     expect(resolveShortcut({ key: 'O', shiftKey: true })).toBe('onion');
     expect(resolveShortcut({ key: 'o' })).toBe('ellipse');
     for (const key of [',', '.', 'k']) expect(resolveShortcut({ key }, true)).toBeNull();
+  });
+
+  it('resolves new tools, clipboard, selection and brush shortcuts', () => {
+    expect(['s', 'u', 'q', 'w'].map(key => resolveShortcut({ key }))).toEqual(['shade', 'polygon', 'lasso', 'wand']);
+    expect(resolveShortcut({ key: 'c', ctrlKey: true })).toBe('copy');
+    expect(resolveShortcut({ key: 'C', ctrlKey: true, shiftKey: true })).toBe('copy-merged');
+    expect(resolveShortcut({ key: 'x', metaKey: true })).toBe('cut');
+    expect(resolveShortcut({ key: 'v', ctrlKey: true })).toBe('paste');
+    expect(resolveShortcut({ key: 'V', ctrlKey: true, shiftKey: true })).toBe('paste-layer');
+    expect(resolveShortcut({ key: 'a', ctrlKey: true })).toBe('select-all');
+    expect(resolveShortcut({ key: 'd', ctrlKey: true })).toBe('deselect');
+    expect(resolveShortcut({ key: 'x' })).toBe('swap-colors');
+    expect(['[', '<', ']', '>'].map(key => resolveShortcut({ key }))).toEqual(['brush-smaller', 'brush-smaller', 'brush-larger', 'brush-larger']);
+    expect(resolveShortcut({ key: 'Enter' })).toBe('commit');
+    expect(resolveShortcut({ key: 'v', ctrlKey: true }, true)).toBeNull();
+  });
+});
+
+describe('canvas resizing', () => {
+  it('places the old canvas at the start, center or end of the new size', () => {
+    expect([0, 1, 2].map(anchor => anchorOffset(anchor, 4, 9))).toEqual([0, 2, 5]);
+    expect([0, 1, 2].map(anchor => anchorOffset(anchor, 9, 4))).toEqual([0, -3, -5]);
   });
 });
