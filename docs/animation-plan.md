@@ -1,8 +1,8 @@
 # Implementierungsplan: KI-Effizienz und Animationen
 
-Stand 17. Oktober 2026 · Basis: Pixelator `c5d051d` · Referenz: Pixelorama [`845de22`](https://github.com/Orama-Interactive/Pixelorama/tree/845de22bd1b7fa43edf3024589a23c3e59c07ba2) (MIT). Dieser Plan beschreibt Soll-Zustand und Reihenfolge; umgesetzt ist davon noch nichts.
+Stand 17. Oktober 2026 · Basis: Pixelator `c5d051d` · Referenz: Pixelorama [`845de22`](https://github.com/Orama-Interactive/Pixelorama/tree/845de22bd1b7fa43edf3024589a23c3e59c07ba2) (MIT). Der Plan ist umgesetzt; Abschnitt 8 nennt die getroffenen Entscheidungen und Abweichungen, die Prüfergebnisse stehen im [Prüfbericht](verification.md).
 
-## 1. Kurzfazit
+## 1. Kurzfazit (Ausgangslage)
 
 - **KI-Assets erstellen: ja, aber noch nicht so effizient wie möglich.** Engine, Scope-Schutz, Revisionen und echte PNG-Inspektion tragen den Agenten-Workflow bereits (realer Codex-Lauf: 32×32-Skelett in 79 s, siehe [Prüfbericht](verification.md)). Die Engpässe liegen beim Datenformat: Raster gehen als JSON-Zahlenlisten hin und her, ein Teilbereich lässt sich nicht kompakt lesen, zwei Zoomstufen brauchen zwei Aufrufe, und jede Bearbeitung liefert den vollen Asset-Kontext zurück.
 - **Animationen: nein.** `PixelDocument` kennt genau ein Bild pro Ebene ([types.ts:4](../src/types.ts)). Es gibt keine Frames, Dauern, Tags, Wiedergabe oder Sprite-Sheets; der Skill verbietet ausdrücklich, Animation zu behaupten ([SKILL.md:30](../skills/pixel-artist/SKILL.md)).
@@ -258,3 +258,21 @@ Dateien und Verhalten wie in 4.6. **Tests:** `tests/animation-helpers.test.ts` (
 5. **Frame-Limit:** 64 *(empfohlen für V1)*.
 
 Pixeloramas MIT-Lizenz bleibt als Herkunft der untersuchten Konzepte dokumentiert; es wird kein Pixelorama-Code, Shader oder Asset kopiert.
+
+## 8. Umsetzungsstand
+
+Phasen 0 bis 3 sind vollständig umgesetzt, aus Phase 4 GIF-Export, Sprite-Sheet-Import und eine Speicher-Kompaktierung.
+
+**Entscheidungen zu Abschnitt 7:** Dauer in ms pro Frame; indexbasierte Tags mit Pixeloramas Einfüge-/Löschregeln; kompakte `apply_operations`-Antwort als Standard; Frame-Limit 64. Beim GIF fiel die Wahl abweichend von der Empfehlung auf einen eigenen GIF89a-Encoder (rund 60 Zeilen): Indexpaletten mit höchstens 33 Einträgen und binärer Transparenz passen direkt zu GIF, eine Abhängigkeit entfällt, und ein unabhängiger Decoder (Pillow) bestätigt das Ergebnis.
+
+**Abweichungen und Ergänzungen gegenüber dem Plan:**
+
+- `create_asset` nimmt Animations-Tags als `animationTags`, weil `tags` dort bereits die Suchbegriffe des Assets sind.
+- Unity-Metadaten sind in `unityManifest` (Einzelbild) und `unitySheetManifest` (Sheet mit Sprites und Clips) getrennt.
+- `inspect_asset` legt Sheets standardmäßig mit höchstens 8 Spalten an, damit das Prüfbild für Vision-Modelle kompakt bleibt; der Export nutzt einen horizontalen Streifen.
+- `stamp` liest andere Ebenen und Frames ohne Schreib-Scope, wie die Gesamtbild-Referenz beim Füllen. Frame-Struktur ignoriert Ebenensperren wie Pixelorama: Sperren schützen das Zeichnen in vorhandenen Frames.
+- Speicher: Die Messung zeigte, dass jede Replay-Antwort das Volldokument doppelt speicherte. Replay-Einträge enthalten nun nur Revisions-ID und Diff; das halbiert den Speicher pro Revision. Cel-Kompaktierung und verlinkte Cels sind bei rund 70 KB pro Revision (8 Frames × 4 Ebenen × 32×32) nicht nötig.
+- Sprite-Sheet-Import: REST-Parameter `frameWidth`/`frameHeight` für beliebige Raster; der Editor erkennt Streifen quadratischer Zellen und fragt nach.
+- Die Server-Tests geben dem Mock-Socket von light-my-request das `destroySoon` echter Sockets; ohne das stürzten längere MCP-Tests über einen Drain-Timer des MCP-Transports ab (vorbestehend, im Betrieb ohne Wirkung).
+
+**Offen:** verlinkte Cels, Godot-`SpriteFrames`-Export, `stamp` aus anderen Assets, reale Agenten-Abnahme der Animationsaufgaben 21–23 und der Import der Exporte in einer echten Engine.

@@ -23,6 +23,13 @@ Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm
 | Pixel-Perfect-Stift | L-Knicke werden optional korrigiert; Geraden, Richtungswechsel und wiederholte Punkte bleiben korrekt. Unter entfernten Eckpunkten erscheint die ursprüngliche Farbe. Vorschau und gespeicherter Strich stimmen überein; Abbruch verwirft die Vorschau. |
 | Füllreferenz und Reichweite | Defaults bewahren bisheriges Fill. Zusammenhängend/global und Ebene/Gesamtbild funktionieren einschließlich Transparenz, verborgener Ebenen, Auswahl und Sperre. Nur die Zielebene wird geschrieben; gleiche Referenz- und Zielfarbe verhindert nötige Zieländerungen nicht. |
 | Ebenenduplikat | Eigener Pixelpuffer, neue eindeutige ID, Kopie unmittelbar oberhalb der Quelle; Quelle unverändert, Sichtbarkeit/Sperre erhalten. Scope, Ebenenlimit und atomare Fehlerbehandlung gelten; Browser und MCP erreichen dieselbe Operation. |
+| Kompakte Raster (`rows`, `read_pixels`) | `rows` erzeugt dasselbe Dokument wie `patch`; `over` erhält Pixel unter `.`; `read_pixels` → `rows` ist verlustfrei; Bereiche über 16 384 Zellen werden abgelehnt. |
+| Frames und Scope | Zeichenoperationen treffen genau einen Frame; ohne eindeutigen Frame `FRAME_REQUIRED`. Frames außerhalb von `editScope.frameIds` bleiben nachweislich gleich. Frame-Struktur verlangt alle Ebenen, kein Rechteck und `allowFrameChanges`. |
+| Tags | Einfügen in/hinter einem Tag verlängert ihn, davor verschiebt ihn; Löschen des einzigen Frames entfernt ihn (Pixelorama-Regeln). Doppelte Namen und ungültige Bereiche werden abgelehnt. |
+| Alte Daten | Gespeicherte Dokumente ohne Frames, alte Replay-Antworten und Projektbundles Version 1 werden als ein Frame gelesen, ohne Pixel zu ändern. |
+| Animationsprüfung | `inspect_asset` zeigt alle Frames als ein Sheet mit Trennfarbe außerhalb der Palette; Onion färbt nur Nachbarframes und nur transparente Stellen. `completed` verlangt eine Inspektion aller Frames. |
+| Animationsexport | Sheet-PNG pixelgleich zu den Einzelframes; Aseprite-JSON mit Rechtecken, Dauern, Tags und Pivot; Unity mit Sprite je Frame (Ursprung unten links) und Clip je Tag; GIF mit Dauern, Transparenz, Tag-Richtung und Loop. Ein exportiertes Sheet lässt sich verlustfrei als Frames re-importieren. |
+| Timeline im Editor | Frames anlegen/duplizieren/verschieben/löschen und Dauer/Tags ändern erzeugen je eine Revision mit Undo/Redo. Zeichnen trifft nur den gewählten Frame. Wiedergabe nutzt die echten Dauern; Onion Skin verändert keine Daten. |
 | Vorschau und Kacheln | 1×/2×/4×/8× zeigen feste Pixelmaße ohne automatisches Schrumpfen; große Bilder scrollen. Hintergrundwechsel und 3×3-Wiederholung verändern keine Dokumentdaten. Laufender Strich und historische Revision werden korrekt dargestellt. |
 
 ## Echter MCP-Durchlauf
@@ -64,5 +71,8 @@ Jede Aufgabe mit dem realen externen Agenten ausführen. Die erste vollständige
 | 18 | Nur Rüstungsfarben aus Nr. 03 ändern | Identität und unveränderte Umgebung |
 | 19 | Elite-Variante aus Nr. 02 erstellen | Eigenständige Variante und Herkunft |
 | 20 | Beschädigte Version der Kiste aus Nr. 11 | Wiedererkennbare Grundform |
+| 21 | 32×32 Skelett aus Nr. 01: 4-Frame-Idle und 6-Frame-Walk, Tags `idle`/`walk` | Ankerstabilität am Pivot, Loop-Übergang |
+| 22 | 16×16 Schleim: 2-Frame-Hüpfen mit Squash | Volumen und Timing |
+| 23 | 16×16 Münze: 6-Frame-Drehung, GIF und Sheet exportieren | Gleichmäßige Rotation, Export in einer Engine importieren |
 
 Die technische Abnahme verlangt fehlerfreie Integritätsprüfungen. Die visuelle Stichprobe dokumentiert die erreichte Qualität samt Ausfällen; sie ist keine allgemeine Garantie für alle Motive, Stile oder Agentenmodelle.

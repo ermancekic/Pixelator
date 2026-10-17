@@ -17,8 +17,8 @@ Lokaler Pixel-Art-Editor mit MCP für Codex, Claude und Antigravity. Benötigt N
 - Revisionen, Rückgängig und Wiederholen
 - Asset-Varianten
 - Animation: Frames, Dauer pro Frame, Tags, Onion Skin und Wiedergabe
-- PNG- und Projektimport
-- PNG-/JSON-Export, Sprite-Sheet mit Aseprite-JSON und Unity-Metadaten mit Pivot
+- PNG-, Sprite-Sheet- und Projektimport
+- PNG-/JSON-Export, Sprite-Sheet mit Aseprite-JSON, GIF und Unity-Metadaten mit Pivot
 - MCP-Aufträge, Bildinspektion, kompakte Rasterein-/ausgabe und Agentenstatus
 
 ## Start

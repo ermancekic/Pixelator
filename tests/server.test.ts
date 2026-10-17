@@ -683,6 +683,34 @@ describe('MCP transport', () => {
     expect((await app.inject(`/api/assets/${created.asset.id}/export?format=sheet&tag=missing`)).json()).toMatchObject({ error: { code: 'UNKNOWN_TAG' } });
   });
 
+  it('exports GIFs and re-imports an exported sprite sheet as frames', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const created = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 2, frames: [{ id: 'a', durationMs: 90 }, { id: 'b' }], animationTags: [{ name: 'spin', from: 0, to: 1, loop: false }] } })).json<AssetDetail>();
+    const drawn = (await app.inject({ method: 'POST', url: `/api/assets/${created.asset.id}/operations`, payload: { expectedRevision: created.revision.id, requestId: 'coin', editScope: { layerIds: ['body'] }, operations: [
+      { op: 'rows', layerId: 'body', frameId: 'a', x: 0, y: 0, rows: ['11', '.1'] }, { op: 'rows', layerId: 'body', frameId: 'b', x: 0, y: 0, rows: ['2.', '22'] },
+    ] } })).json<ApplyResult>();
+    const gif = await app.inject(`/api/assets/${created.asset.id}/export?format=gif&tag=spin&scale=3`);
+    expect(gif.statusCode).toBe(200);
+    expect(gif.headers['content-type']).toBe('image/gif');
+    expect(gif.rawPayload.subarray(0, 6).toString()).toBe('GIF89a');
+    expect([gif.rawPayload.readUInt16LE(6), gif.rawPayload.readUInt16LE(8)]).toEqual([6, 6]);
+    expect(gif.rawPayload.includes(Buffer.from('NETSCAPE2.0'))).toBe(false);
+    const mcpGif = await rpc<ToolResult>(app, 'tools/call', { name: 'export_asset', arguments: { assetId: created.asset.id, format: 'gif' } });
+    expect((mcpGif.structuredContent as { path: string }).path).toMatch(/\.gif$/);
+    const sheet = (await app.inject(`/api/assets/${created.asset.id}/export?format=sheet`)).rawPayload.toString('base64');
+    const imported = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Coin again', type: 'character', pngBase64: sheet, frameWidth: 2, frameHeight: 2, durationMs: 120 } });
+    expect(imported.statusCode, imported.body).toBe(200);
+    const copy = imported.json<AssetDetail>().revision.document;
+    expect(copy).toMatchObject({ width: 2, height: 2, pivot: { x: 1, y: 2 } });
+    expect(copy.frames.map(frame => [frame.id, frame.durationMs])).toEqual([['frame-1', 120], ['frame-2', 120]]);
+    const colors = (doc: typeof copy) => doc.frames.map(frame => frame.cels[doc.layers[0].id].map(index => doc.palette[index]));
+    expect(colors(copy)).toEqual(colors(drawn.revision.document));
+    const half = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Bad', type: 'item', pngBase64: sheet, frameWidth: 2 } });
+    expect(half.statusCode).toBe(400);
+    const uneven = await app.inject({ method: 'POST', url: '/api/import', payload: { projectId: project.id, name: 'Bad', type: 'item', pngBase64: sheet, frameWidth: 3, frameHeight: 2 } });
+    expect(uneven.json()).toMatchObject({ error: { code: 'SHEET_SIZE' } });
+  });
+
   it('requires a frame for drawing in animations and rejects a frame layout for several frames', async () => {
     const app = await open(); const { project } = await setup(app);
     const created = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 2, frames: [{ id: 'a' }, { id: 'b' }] } })).structuredContent as unknown as AssetDetail;

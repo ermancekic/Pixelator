@@ -5,7 +5,7 @@ import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import * as schema from './contracts.js';
 import { applyOperations, createDocument, STYLE_PRESETS, upgradeDocument, validateDocument } from './engine.js';
-import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDocument, Project, Revision, RevisionSummary } from './types.js';
+import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDiff, PixelDocument, Project, Revision, RevisionSummary } from './types.js';
 
 export class AppError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -215,10 +215,15 @@ export class Store extends EventEmitter {
     const row = this.db.prepare('SELECT hash,data FROM requests WHERE id=?').get(`${assetId}:${requestId}`) as { hash: string; data: string } | undefined;
     if (!row) return undefined;
     if (row.hash !== hash(payload)) throw new AppError('IDEMPOTENCY_CONFLICT', 'Diese requestId wurde bereits mit anderem Inhalt verwendet.', 409);
-    return upgradeStored(JSON.parse(row.data) as T);
+    const stored = JSON.parse(row.data) as { revisionId?: string; diff?: PixelDiff; revision?: Revision };
+    if (stored.revision) return upgradeStored(stored as T);
+    // Compact records point at the revision; the asset then had that revision as head, and nothing else on it changes.
+    const revision = this.getRevision(assetId, stored.revisionId);
+    const asset: Asset = { ...this.read<Asset>('assets', assetId), headRevisionId: revision.id, updatedAt: revision.createdAt };
+    return { asset, revision, ...(stored.diff ? { diff: stored.diff } : {}) } as T;
   }
-  private saveRequest(assetId: string, requestId: string, payload: unknown, result: unknown) {
-    this.db.prepare('INSERT INTO requests(id,hash,data) VALUES(?,?,?)').run(`${assetId}:${requestId}`, hash(payload), JSON.stringify(result));
+  private saveRequest(assetId: string, requestId: string, payload: unknown, result: { revision: Revision; diff?: PixelDiff }) {
+    this.db.prepare('INSERT INTO requests(id,hash,data) VALUES(?,?,?)').run(`${assetId}:${requestId}`, hash(payload), JSON.stringify({ revisionId: result.revision.id, ...(result.diff ? { diff: result.diff } : {}) }));
   }
   private appendRevision(asset: Asset, revision: Revision) {
     this.insertRevision(revision);

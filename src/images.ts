@@ -1,5 +1,6 @@
 import { PNG } from 'pngjs';
-import { composite, createDocument, readIndices } from './engine.js';
+import { composite, createDocument, DEFAULT_FRAME_MS, MAX_FRAMES, readIndices } from './engine.js';
+import { encodeGif } from './gif.js';
 import { AppError } from './store.js';
 import type { AnimationTag, PixelDocument } from './types.js';
 
@@ -117,6 +118,24 @@ export function framesFor(document: PixelDocument, tagName?: string): string[] {
   return document.frames.slice(tag.from, tag.to + 1).map(frame => frame.id);
 }
 
+/** Animated GIF of all frames or one tag, honoring the tag's direction and loop flag; index 0 stays transparent. */
+export function renderGif(document: PixelDocument, { tag: tagName, scale = 1 }: { tag?: string; scale?: number } = {}): Buffer {
+  if (!Number.isInteger(scale) || scale < 1 || scale > 16) throw new AppError('RENDER_SIZE', 'GIF-Zoom muss ganzzahlig sein und zwischen 1 und 16 liegen.');
+  const tag = tagName === undefined ? undefined : document.tags.find(item => item.name === tagName);
+  let ids = framesFor(document, tagName);
+  if (tag?.direction === 'reverse') ids = [...ids].reverse();
+  if (tag?.direction === 'pingpong' && ids.length > 2) ids = [...ids, ...ids.slice(1, -1).reverse()];
+  const width = document.width * scale; const height = document.height * scale;
+  const frames = ids.map(id => {
+    const source = readIndices(document, undefined, id);
+    const indices = scale === 1 ? source : new Uint8Array(width * height);
+    if (scale > 1) for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) (indices as Uint8Array)[y * width + x] = source[Math.floor(y / scale) * document.width + Math.floor(x / scale)];
+    // Browsers treat delays below 2/100 s as 1/10 s, so shorter frames are clamped to 20 ms.
+    return { indices, delayCs: Math.max(2, Math.round(document.frames.find(frame => frame.id === id)!.durationMs / 10)) };
+  });
+  return encodeGif(width, height, document.palette, frames, tag?.loop ?? true);
+}
+
 /** Tags fully contained in the exported frames, re-indexed to the sheet order. */
 function exportedTags(document: PixelDocument, frameIds: string[]): AnimationTag[] {
   return document.tags.flatMap(tag => {
@@ -170,6 +189,28 @@ export function importPng(base64: string, maxColors: number, paletteLocked = fal
   if (palette.length === 1) palette.push('#000000');
   const document = createDocument({ width, height, palette, maxColors, paletteLocked, layers: [{ id: 'import', name: 'PNG (unsegmentiert)' }] });
   document.frames[0].cels.import = pixels;
+  return document;
+}
+
+/** Cuts an imported sheet into frames of equal size, row by row; without frameCount, trailing empty cells are dropped. */
+export function sliceSheet(sheet: PixelDocument, frameWidth: number, frameHeight: number, options: { frameCount?: number; durationMs?: number } = {}): PixelDocument {
+  if (!Number.isInteger(frameWidth) || frameWidth < 1 || !Number.isInteger(frameHeight) || frameHeight < 1 || sheet.width % frameWidth || sheet.height % frameHeight) throw new AppError('SHEET_SIZE', 'Breite und Höhe des Bildes müssen Vielfache der Frame-Größe sein.');
+  const columns = sheet.width / frameWidth; const rows = sheet.height / frameHeight;
+  const source = sheet.frames[0].cels[sheet.layers[0].id];
+  const cells = Array.from({ length: columns * rows }, (_, cell) => {
+    const left = cell % columns * frameWidth; const top = Math.floor(cell / columns) * frameHeight; const pixels: number[] = [];
+    for (let y = 0; y < frameHeight; y++) for (let x = 0; x < frameWidth; x++) pixels.push(source[(top + y) * sheet.width + left + x]);
+    return pixels;
+  });
+  let count = options.frameCount ?? cells.length;
+  if (options.frameCount === undefined) while (count > 1 && cells[count - 1].every(index => index === 0)) count--;
+  if (!Number.isInteger(count) || count < 1 || count > cells.length || count > MAX_FRAMES) throw new AppError('SHEET_FRAMES', `Das Sheet ergibt ${count} Frames; erlaubt sind 1 bis ${Math.min(cells.length, MAX_FRAMES)}.`);
+  const document = createDocument({
+    width: frameWidth, height: frameHeight, palette: sheet.palette, maxColors: sheet.maxColors, paletteLocked: sheet.paletteLocked,
+    layers: sheet.layers.map(({ id, name }) => ({ id, name })),
+    frames: Array.from({ length: count }, (_, i) => ({ id: `frame-${i + 1}`, durationMs: options.durationMs ?? DEFAULT_FRAME_MS })),
+  });
+  document.frames.forEach((frame, i) => { frame.cels[sheet.layers[0].id] = cells[i]; });
   return document;
 }
 

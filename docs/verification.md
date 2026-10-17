@@ -2,6 +2,31 @@
 
 Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
 
+## Ergänzung: KI-Effizienz und Animation
+
+Umgesetzt nach dem [Implementierungsplan](animation-plan.md). Am 17. Oktober 2026 bestanden **164 Tests in 10 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu geprüft sind unter anderem: `rows`/`read_pixels` verlustfrei, Frames mit Scope-Nachweis, Pixelorama-Tag-Regeln, alte Dokumente/Replays/Bundles als ein Frame, Sheet-Inspektion mit Onion und Frame-Abdeckung für `completed`, Sheet-/Aseprite-/Unity-/GIF-Export sowie Sheet-Re-Import.
+
+**Messung über MCP** (In-Memory-Server, 32×32-Sprite, Zeichen inklusive Text- und `structuredContent`-Kopie):
+
+| Aufruf | vorher | nachher |
+| --- | ---: | ---: |
+| `apply_operations`-Antwort | 3 310 | 1 334 (kompakt), 3 920 mit `response: "full"` |
+| Ganze Ebene lesen | 7 590 (`get_asset` `includePixels`) | 3 394 (`read_pixels`) |
+| 8×8-Ausschnitt lesen | nicht möglich | 1 282 |
+| 32×32-Block schreiben | 2 232 (`patch`) | 1 171 (`rows`) |
+| `tools/list` (einmal je Sitzung) | 23 512 | 32 318 |
+| `get_workflow` (einmal je Auftrag) | 24 475 | 32 732 |
+
+Die laufenden Kosten pro Batch sinken deutlich; der feste Kontext wächst durch Frame-Operationen und den Animationsteil des Skills. Token wurden nicht mit einem echten Tokenizer gemessen.
+
+**Speicher:** Ein Asset mit 8 Frames × 4 Ebenen × 32×32 belegt rund 69 KB JSON pro Revision. Die Replay-Tabelle speicherte jede Antwort samt Dokument ein zweites Mal (rund 141 KB Datenbank pro Revision). Neue Replay-Einträge enthalten nur Revisions-ID und Diff (rund 73 KB pro Revision); alte Einträge bleiben lesbar. Eine weitere Kompaktierung der Cels oder verlinkte Cels sind bei dieser Größenordnung nicht nötig und bleiben offen.
+
+**GIF:** Der eigene GIF89a-Encoder wurde zusätzlich mit dem unabhängigen Decoder von Pillow 12.3 geprüft (zwei Frames, darunter 10 800 Zufallsindizes mit Tabellen-Reset): Indizes, Dauer, Transparenz und Loop stimmen.
+
+**Browser** (Chromium über Playwright, separater Dienst auf Port 4318 mit eigener Datenbank): Frame duplizieren, mit dem Stift nur in Frame 2 zeichnen (Frame 1 bytegleich), Dauer 250 ms setzen, Onion Skin per `Umschalt+O`, Tag `bounce` (Ping-Pong) im Dialog anlegen, Wiedergabe per `K` mit wechselnden Frames in der Vorschau und Stopp, Frame-Navigation mit `,`, Undo des Tags, externe Agentenänderung an Frame 2 mit Hinweis „Asset extern aktualisiert“, Frame löschen, PNG-Streifen als 3-Frame-Animation importieren und GIF-Link. Keine Seitenfehler; die Konsole meldete nur das fehlende `favicon.ico`.
+
+**Nicht geprüft:** Ein realer Codex- oder Claude-Animationsauftrag (Aufgaben 21–23 der [Abnahmematrix](testing.md)) und der Import von Aseprite-JSON und Unity-Metadaten in einer echten Engine. Die im Artist Guide verlinkten Animationsquellen (Saint11, Wikipedia) waren aus der Prüfumgebung wegen der Netzwerkrichtlinie nicht abrufbar; ihre Aussagen sind über Suchergebnisse belegt.
+
 ## Ergänzung: Pixelorama-Zeichenhilfen
 
 Am 17. Oktober 2026 wurden **101 Tests in 7 Dateien** erfolgreich ausgeführt; TypeScript-Prüfung und Produktionsbuild bestehen. Neue Regressionstests decken Zeichensymmetrie, Pixel-Perfect, die Füllreferenz über sichtbare Ebenen, globale Farbflächen, Ebenenduplikate und deren REST-/MCP-/Projektimport-Verhalten ab.
@@ -56,4 +81,4 @@ Neue automatisierte Regressionstests prüfen vollständig transparente PNGs bei 
 
 Claude Code **2.1.302** meldete den Pixelator-MCP-Server als verbunden. Der tatsächliche Artist-Durchlauf wurde vor der ersten Generierung durch das Wochenlimit des Claude-Kontos abgewiesen. Claude-Bildverständnis und künstlerische Ergebnisse sind deshalb noch nicht abgenommen. Der zehnteilige Codex-Test ersetzt diesen zweiten Clienttest nicht.
 
-Animationen, Sprite-Sheets, Tilesets und Asset Packs gehören zum nächsten Ausbau. Projektimporte sind in V1 auf 128 MB begrenzt; größere Historien benötigen derzeit ein Datenbank-Backup.
+Tilesets und Asset Packs gehören zum nächsten Ausbau; Animationen und Sprite-Sheets sind seit der Ergänzung oben vorhanden. Projektimporte sind in V1 auf 128 MB begrenzt; größere Historien benötigen derzeit ein Datenbank-Backup.

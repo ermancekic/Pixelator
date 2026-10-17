@@ -107,7 +107,8 @@ export const artistRunImport = runInput.extend({
 }).strict();
 export const importPngInput = z.object({
   projectId: id, name, type: assetType, pngBase64: z.string().min(1),
-}).strict();
+  frameWidth: size.optional(), frameHeight: size.optional(), frameCount: z.number().int().min(1).max(64).optional(), durationMs: durationMs.optional(),
+}).strict().refine(input => (input.frameWidth === undefined) === (input.frameHeight === undefined), { message: 'frameWidth and frameHeight belong together.' });
 export const revisionImport = z.object({
   id, assetId: id, parentId: id.nullable(), document: documentSchema,
   label: z.string().max(300), actor: z.enum(['human', 'agent', 'import']),
