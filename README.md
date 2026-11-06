@@ -1,3 +1,5 @@
+> I created this project to create 2D assets with my Claude agents.
+
 ![Pixelator – your pixel art studio](docs/assets/readme-header.gif)
 
 # Pixelator
@@ -33,6 +35,12 @@ Local pixel art editor with MCP for Codex, Claude and Antigravity. Requires Node
 - Export window with live preview: PNG, sprite sheet with Aseprite JSON, GIF, tileset, Unity, palette and project file; images 1–16×
 - MCP runs, image inspection, compact raster input/output and agent status
 
+## Generated examples
+
+[![Characters generated with Pixelator](docs/assets/examples/characters.gif)](docs/examples.md)
+
+[More examples](docs/examples.md): enemies, bosses, effects and backgrounds. The banners at the top and bottom of this README were also made with Pixelator.
+
 ## Start
 
 ```powershell
@@ -64,5 +72,7 @@ claude mcp add --transport http pixelator http://127.0.0.1:4317/mcp --scope user
 Then reload the MCP connection in the client. [More details](docs/mcp.md) · [Editor](docs/editor.md) · [Tiles](docs/tiles.md) · [Tests](docs/testing.md)
 
 Data lives in `data/`. For backups, stop the app and copy the folder.
+
+[MIT License](LICENSE)
 
 ![Pixelator panorama](docs/assets/readme-footer.gif)
