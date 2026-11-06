@@ -1,94 +1,94 @@
-# Prüfung und Abnahme
+# Testing and acceptance
 
-Die automatisierten Prüfungen sind mit `npm run typecheck`, `npm test` und `npm run build` ausführbar. Ihr Erfolg belegt keine künstlerische Qualität und keine Bildübertragung an einen Agenten-Client. Die folgenden realen Durchläufe sind eine gesonderte Abnahme; dieses Dokument behauptet nicht, dass sie bereits erfolgt ist.
+The automated checks run with `npm run typecheck`, `npm test` and `npm run build`. Passing them proves neither artistic quality nor image delivery to an agent client. The real run-throughs below are a separate acceptance; this document does not claim that it has already taken place.
 
-## Technische Integrität
+## Technical integrity
 
-| Bereich | Erwartung |
+| Area | Expectation |
 | --- | --- |
-| Raster und Palette | Nur erlaubte Größen und Indizes; Index `0` transparent; sichtbare Farben innerhalb der Grenze. |
-| Atomare Bearbeitung | Ein ungültiger Befehl verwirft den gesamten Batch; keine teilweise gespeicherte Änderung. |
-| Lokaler Edit | Rasterwerte außerhalb der erlaubten Ebene und des Rechtecks bleiben exakt gleich. Verschieben berücksichtigt Ausgangs- und Zielbereich. |
-| Gesperrte Ebene | Zeichen- und Strukturänderungen umgehen die Sperre nicht. |
-| Revisionen | Alte Revisionen bleiben lesbar; Wiederherstellen erzeugt eine neue aktuelle Revision. |
-| Löschen | Bestätigung nennt Asset bzw. Projekt und endgültigen Umfang. Revisionen, Replay-Anfragen und Aufträge werden atomar entfernt. Varianten bleiben eigenständig; andere Projekte unverändert. Externe Löschungen leeren die betroffene Ansicht und schließen veraltete Löschdialoge. |
-| Große Raster | Füllen und Vorschau bleiben rastergenau; schnelle Striche verlieren keine Zwischenpunkte. Kleine Thumbnails verwenden begrenzte Pixelpuffer. Der Verlauf liefert Metadaten und lädt historische Raster einzeln. |
-| Konkurrenz | Veraltete `expectedRevision` wird abgelehnt; derselbe `requestId` mit demselben Payload erzeugt keine doppelte Änderung. |
-| Render und Export | Nearest-Neighbor-Vorschau; PNG mit korrekten Abmessungen und echtem Alpha; JSON und Unity-Metadaten passen zur Revision. |
-| Persistenz | Nach Service-Neustart sind Projekte, Assets und Revisionen wieder vorhanden. |
-| Artist-Run | Abbruch und Limits erhalten den letzten gültigen Stand; Fertigstellen prüft den aktuellen statt eines alten Review-Stands. |
-| Artist Guide | Aktuelle Regeln über `get_workflow`, Ressource und Start/Fortsetzen konsistent verfügbar; Stilkontext beim PNG. |
-| Navigation/Hotkeys | Zoom hält den Punkt am Mauszeiger, bleibt ganzzahlig und begrenzt; Pan verändert keine Rasterdaten; Eingaben und Dialoge blockieren Editor-Kürzel. |
-| Fensteraufteilung | Bibliothek/Eigenschaften in der Breite und Timeline/Vorschau/Palette/Ebenen in der Höhe ziehen; Mindestgrößen schützen die Zeichenfläche. Größen bleiben nach Neuladen erhalten. Doppelklick oder Enter setzt den Bereich zurück; Pfeiltasten sowie Home/End ändern die Größe ohne Editor-Kürzel auszulösen. Beim Verkleinern des Fensters bleiben Bereiche erreichbar; mobil werden Desktopgrößen ignoriert. |
-| Zeichensymmetrie | Stift, Radierer, Linie und Formen spiegeln um die Leinwandmitte; gerade/ungerade Maße und kombinierte Achsen erzeugen korrekte, eindeutige Punkte. Auswahlgrenzen gelten für jedes Ziel; ein Strich bleibt eine Revision. |
-| Pixel-Perfect-Stift | L-Knicke werden optional korrigiert; Geraden, Richtungswechsel und wiederholte Punkte bleiben korrekt. Unter entfernten Eckpunkten erscheint die ursprüngliche Farbe. Vorschau und gespeicherter Strich stimmen überein; Abbruch verwirft die Vorschau. |
-| Füllreferenz und Reichweite | Defaults bewahren bisheriges Fill. Zusammenhängend/global und Ebene/Gesamtbild funktionieren einschließlich Transparenz, verborgener Ebenen, Auswahl und Sperre. Nur die Zielebene wird geschrieben; gleiche Referenz- und Zielfarbe verhindert nötige Zieländerungen nicht. |
-| Ebenenduplikat | Eigener Pixelpuffer, neue eindeutige ID, Kopie unmittelbar oberhalb der Quelle; Quelle unverändert, Sichtbarkeit/Sperre erhalten. Scope, Ebenenlimit und atomare Fehlerbehandlung gelten; Browser und MCP erreichen dieselbe Operation. |
-| Kompakte Raster (`rows`, `read_pixels`) | `rows` erzeugt dasselbe Dokument wie `patch`; `over` erhält Pixel unter `.`; `read_pixels` → `rows` ist verlustfrei; Bereiche über 16 384 Zellen werden abgelehnt. |
-| Frames und Scope | Zeichenoperationen treffen genau einen Frame; ohne eindeutigen Frame `FRAME_REQUIRED`. Frames außerhalb von `editScope.frameIds` bleiben nachweislich gleich. Frame-Struktur verlangt alle Ebenen, kein Rechteck und `allowFrameChanges`. |
-| Tags | Einfügen in/hinter einem Tag verlängert ihn, davor verschiebt ihn; Löschen des einzigen Frames entfernt ihn (Pixelorama-Regeln). Doppelte Namen und ungültige Bereiche werden abgelehnt. |
-| Alte Daten | Gespeicherte Dokumente ohne Frames, alte Replay-Antworten und Projektbundles Version 1 werden als ein Frame gelesen, ohne Pixel zu ändern. |
-| Animationsprüfung | `inspect_asset` zeigt alle Frames als ein Sheet mit Trennfarbe außerhalb der Palette; Onion färbt nur Nachbarframes und nur transparente Stellen. `completed` verlangt eine Inspektion aller Frames. |
-| Animationsexport | Sheet-PNG pixelgleich zu den Einzelframes; Aseprite-JSON mit Rechtecken, Dauern, Tags und Pivot; Unity mit Sprite je Frame (Ursprung unten links) und Clip je Tag; GIF mit Dauern, Transparenz, Tag-Richtung und Loop. Ein exportiertes Sheet lässt sich verlustfrei als Frames re-importieren. |
-| Timeline im Editor | Frames anlegen/duplizieren/verschieben/löschen und Dauer/Tags ändern erzeugen je eine Revision mit Undo/Redo. Zeichnen trifft nur den gewählten Frame. Wiedergabe nutzt die echten Dauern; Onion Skin verändert keine Daten. |
-| Auswahlmasken | `editScope.mask` lässt nur `#`-Pixel im Rechteck schreiben; Füllen, Ersetzen und Kontur bleiben darin, andere Operationen werden abgelehnt. Lasso, Zauberstab, Hinzufügen/Abziehen und das Verschieben/Spiegeln/Drehen von Freiformen ändern nur ausgewählte Pixel. |
-| Leinwandgröße | `resize_canvas` vergrößert, verkleinert und verschiebt alle Ebenen und Frames, setzt den Pivot mit, aktualisiert die Assetgröße und lehnt das Abschneiden gesperrter Pixel ab. Zuschneiden auf Auswahl/Inhalt und Wiederherstellen älterer Größen funktionieren. |
-| Ebenen zusammenführen | Ergebnis liegt in der untersten Ebene, das Gesamtbild bleibt pixelgleich; sichtbare Zwischenebenen, gesperrte oder verborgene Quellen werden abgelehnt. Alle Frames werden zusammengeführt. |
-| Zwischenablage | Kopieren/Einfügen innerhalb eines Assets ist pixelgleich; zwischen Paletten werden Farben exakt zugeordnet, angehängt oder angenähert. Einfügen als Ebene ist eine Revision; fremde PNGs aus der System-Zwischenablage werden gelesen. |
-| Pinsel, Muster, Schattieren | Pinselgrößen und -formen, an der Leinwand ausgerichtete Muster mit optionaler Zweitfarbe sowie Schattieren entlang Palette/Helligkeit; Transparenz bleibt beim Schattieren unverändert. |
-| Palettendateien und Export | GPL/PAL/HEX/TXT werden gelesen und GPL/PAL/HEX geschrieben; „Pixel zuordnen“ ersetzt jedes Pixel durch die ähnlichste Farbe. PNG, Sheet und GIF lassen sich 1–16× exportieren; Sheet-JSON adressiert das vergrößerte Bild. |
-| Exportfenster | Jedes Format nennt seine Dateien mit den Server-URLs; die Vorschau von Sheet und Tileset ist pixelgleich zur heruntergeladenen Datei, Textformate zeigen den Dateiinhalt. Mehrere Dateien werden alle geladen; nicht passende Formate (Sheet/GIF ohne Animation, Tileset ohne Raster) sind gesperrt. Einstellungen bleiben erhalten. |
-| Menüleiste und Einstellungen | Menüs per Maus und Tastatur; Einträge lösen dieselben Befehle wie Werkzeugleisten und Kürzel aus. Bibliothek, Eigenschaften, Animationsleiste und Raster lassen sich ausblenden; Sprache und Ansicht überstehen ein Neuladen. |
-| Sprache | Englisch ist Standard. Jeder Oberflächentext hat eine englische Übersetzung mit denselben Platzhaltern; in der englischen Oberfläche erscheint kein deutscher Text. Servermeldungen sind englisch und in der deutschen Oberfläche übersetzt. |
-| Referenzbild | Hinter/über der Zeichnung, Deckkraft und Einpassung einstellbar; keine Änderung an Dokument, Revisionen oder Exporten. |
-| Tileset-Raster | Raster nur bei teilbarer Leinwand; Kachel-IDs zeilenweise; Metadaten (Name, Klasse, Häufigkeit, Kollision im Kachelbereich, Terrain nur auf vom Modus gelesenen Positionen) werden validiert. Neue Kachelgröße setzt Metadaten zurück; Leinwandänderungen um ganze Kacheln nehmen sie mit, andere werden abgelehnt. |
-| Autotiles | Blob 47, Kanten 16 und Ecken 15 entstehen aus den Schlüsselkacheln, sind gelabelt und vollständig; ungerade Kachelgrößen und zu kleine Raster werden mit Größenangabe abgelehnt. Fehlende Kombinationen erzeugen `TERRAIN_INCOMPLETE` und Magenta-Zellen in der Testkarte. |
-| Nahtlos und Versatz | Striche und Formen laufen auf wrappenden Achsen über den Rand; `shift` versetzt mit Umlauf, nur im Rechteck. Geisterkacheln verändern keine Daten. |
-| Tileset-Export | PNG mit Extrude/Abstand; animierte Kacheln als Zeilenblöcke; Tiled TSX/TSJ mit Klasse, Name, Kollision, Animation und Wang-Set; Godot `.tres` mit Terrain-Modus, Peering-Bits, Physik, Custom Data und Animation; Unity-Manifest. Godot lädt das TileSet, und sein Terrain-Pinsel wählt dieselben Kacheln wie die Testkarte; ein Tiled-Parser liest TSX und TSJ gleich. |
-| Projektübersicht | `GET /api/projects/overview` liefert pro Projekt Assetzahl, letzte Änderung und bis zu vier zuletzt geänderte Assets. Das Fenster sortiert nach Aktivität, markiert das geöffnete Projekt, sucht, wechselt per Klick, Pfeiltasten und `Enter`, schließt mit `Esc` und bleibt mobil ohne horizontales Scrollen. |
-| Vorschau und Kacheln | „Einpassen“ zeigt das ganze Bild, große Bilder verkleinert; 1×/2×/4×/8× zeigen feste Pixelmaße, große Bilder scrollen. Hintergrundwechsel und 3×3-Wiederholung verändern keine Dokumentdaten. Laufender Strich und historische Revision werden korrekt dargestellt. |
+| Raster and palette | Only allowed sizes and indices; index `0` transparent; visible colors within the limit. |
+| Atomic editing | An invalid command discards the whole batch; no partially saved change. |
+| Local edit | Raster values outside the allowed layer and rectangle stay exactly the same. Moving accounts for both the source and the target area. |
+| Locked layer | Drawing and structural changes do not bypass the lock. |
+| Revisions | Old revisions stay readable; restoring creates a new current revision. |
+| Deletion | The confirmation names the asset or project and the permanent scope. Revisions, replay requests and runs are removed atomically. Variants stay independent; other projects unchanged. External deletions clear the affected view and close stale delete dialogs. |
+| Large rasters | Fill and preview stay pixel-accurate; fast strokes lose no intermediate points. Small thumbnails use bounded pixel buffers. The history returns metadata and loads historical rasters individually. |
+| Concurrency | A stale `expectedRevision` is rejected; the same `requestId` with the same payload creates no duplicate change. |
+| Rendering and export | Nearest-neighbor preview; PNG with correct dimensions and real alpha; JSON and Unity metadata match the revision. |
+| Persistence | After a service restart, projects, assets and revisions are present again. |
+| Artist run | Cancellation and limits keep the last valid state; finishing checks the current state instead of an old review state. |
+| Artist Guide | Current rules consistently available via `get_workflow`, the resource and start/resume; style context with the PNG. |
+| Navigation/hotkeys | Zoom keeps the point under the mouse pointer in place, stays integer and bounded; panning changes no raster data; inputs and dialogs block editor shortcuts. |
+| Panel layout | Drag the width of library/properties and the height of timeline/preview/palette/layers; minimum sizes protect the canvas. Sizes persist after a reload. Double-click or Enter resets the panel; arrow keys and Home/End resize without triggering editor shortcuts. When the window shrinks, panels stay reachable; on mobile, desktop sizes are ignored. |
+| Drawing symmetry | Pencil, eraser, line and shapes mirror across the canvas center; even/odd dimensions and combined axes produce correct, unique points. Selection bounds apply to every target; a stroke stays one revision. |
+| Pixel-perfect pencil | L-shaped kinks are optionally corrected; straight lines, direction changes and repeated points stay correct. The original color appears under removed corner points. Preview and saved stroke match; canceling discards the preview. |
+| Fill reference and extent | Defaults preserve the previous fill behavior. Contiguous/global and layer/whole image work, including transparency, hidden layers, selection and locks. Only the target layer is written; identical reference and target colors do not prevent necessary target changes. |
+| Layer duplication | Separate pixel buffer, new unique ID, copy directly above the source; source unchanged, visibility/lock preserved. Scope, layer limit and atomic error handling apply; browser and MCP reach the same operation. |
+| Compact rasters (`rows`, `read_pixels`) | `rows` produces the same document as `patch`; `over` keeps pixels under `.`; `read_pixels` → `rows` is lossless; areas over 16,384 cells are rejected. |
+| Frames and scope | Drawing operations target exactly one frame; without an unambiguous frame, `FRAME_REQUIRED`. Frames outside `editScope.frameIds` demonstrably stay the same. Frame structure changes require all layers, no rectangle and `allowFrameChanges`. |
+| Tags | Inserting inside/after a tag extends it, inserting before it shifts it; deleting its only frame removes it (Pixelorama rules). Duplicate names and invalid ranges are rejected. |
+| Legacy data | Stored documents without frames, old replay responses and version 1 project bundles are read as one frame without changing pixels. |
+| Animation inspection | `inspect_asset` shows all frames as one sheet with a gutter color outside the palette; onion tints only neighboring frames and only transparent spots. `completed` requires an inspection of all frames. |
+| Animation export | Sheet PNG pixel-identical to the individual frames; Aseprite JSON with rectangles, durations, tags and pivot; Unity with one sprite per frame (origin bottom left) and one clip per tag; GIF with durations, transparency, tag direction and loop. An exported sheet can be re-imported losslessly as frames. |
+| Timeline in the editor | Adding/duplicating/moving/deleting frames and changing duration/tags each create one revision with undo/redo. Drawing hits only the selected frame. Playback uses the real durations; onion skin changes no data. |
+| Selection masks | `editScope.mask` allows writes only to `#` pixels in the rectangle; fill, replace and outline stay inside it, other operations are rejected. Lasso, magic wand, add/subtract and moving/flipping/rotating freeform selections change only selected pixels. |
+| Canvas size | `resize_canvas` enlarges, shrinks and shifts all layers and frames, moves the pivot along, updates the asset size and refuses to cut off locked pixels. Cropping to selection/content and restoring older sizes work. |
+| Merge layers | The result lands in the lowest layer, the whole image stays pixel-identical; visible intermediate layers, locked or hidden sources are rejected. All frames are merged. |
+| Clipboard | Copy/paste within an asset is pixel-identical; between palettes, colors are matched exactly, appended or approximated. Pasting as a layer is one revision; external PNGs from the system clipboard are read. |
+| Brushes, patterns, shading | Brush sizes and shapes, canvas-aligned patterns with an optional secondary color, and shading along palette/brightness; transparency stays unchanged when shading. |
+| Palette files and export | GPL/PAL/HEX/TXT are read and GPL/PAL/HEX are written; “Map pixels” replaces each pixel with the closest color. PNG, sheet and GIF can be exported at 1–16×; the sheet JSON addresses the enlarged image. |
+| Export window | Each format lists its files with their server URLs; the sheet and tileset preview is pixel-identical to the downloaded file, text formats show the file contents. Multiple files are all downloaded; unsuitable formats (sheet/GIF without animation, tileset without grid) are disabled. Settings persist. |
+| Menu bar and settings | Menus via mouse and keyboard; items trigger the same commands as toolbars and shortcuts. Library, properties, timeline and grids can be hidden; language and view survive a reload. |
+| Language | English is the default. Every interface text has an English translation with the same placeholders; no German text appears in the English interface. Server messages are in English and translated in the German interface. |
+| Reference image | Behind/above the drawing, opacity and fit adjustable; no change to the document, revisions or exports. |
+| Tileset grid | Grid only with a divisible canvas; tile IDs row by row; metadata (name, class, probability, collision within the tile area, terrain only at positions the mode reads) is validated. A new tile size resets the metadata; canvas changes by whole tiles carry it along, others are rejected. |
+| Autotiles | Blob 47, Edges 16 and Corners 15 are built from the key tiles, labeled and complete; odd tile sizes and grids that are too small are rejected with size information. Missing combinations produce `TERRAIN_INCOMPLETE` and magenta cells in the test map. |
+| Seamless and offset | Strokes and shapes continue across the edge on wrapping axes; `shift` offsets with wraparound, only within the rectangle. Ghost tiles change no data. |
+| Tileset export | PNG with extrude/spacing; animated tiles as row blocks; Tiled TSX/TSJ with class, name, collision, animation and Wang set; Godot `.tres` with terrain mode, peering bits, physics, custom data and animation; Unity manifest. Godot loads the TileSet, and its terrain brush picks the same tiles as the test map; a Tiled parser reads TSX and TSJ identically. |
+| Project overview | `GET /api/projects/overview` returns the asset count, last change and up to four most recently changed assets per project. The window sorts by activity, marks the open project, searches, switches by click, arrow keys and `Enter`, closes with `Esc` and stays free of horizontal scrolling on mobile. |
+| Preview and tiling | “Fit” shows the whole image, with large images scaled down; 1×/2×/4×/8× show fixed pixel sizes, large images scroll. Background switching and 3×3 repetition change no document data. An in-progress stroke and a historical revision are displayed correctly. |
 
-## Echter MCP-Durchlauf
+## Real MCP run-through
 
-Mit den tatsächlich verwendeten Codex-/Claude-/Antigravity-Clients separat prüfen. Die App darf dabei weder ein Modell laden noch einen Agenten starten.
+Test separately with the Codex/Claude/Antigravity clients actually in use. The app must neither load a model nor start an agent in the process.
 
-1. Service starten, Client per MCP verbinden und Pixel-Artist-Skill laden. Client-Version, Modell und Transport notieren.
-2. Ein 32×32-Skelett mit separater Schwertebene erstellen. `inspect_asset` muss ein echtes PNG als MCP-Bildinhalt liefern. Prüfen, dass der Agent dieses Bild tatsächlich visuell auswerten kann; ein Link oder JSON mit Bildmaßen reicht nicht.
-3. Eine konkrete visuelle Beobachtung mit zugehöriger Revisions-ID aufzeichnen. Eine sichtbare Verbesserung vornehmen, erneut inspizieren und bewerten.
-4. Das Schwert um exakt drei Pixel verlängern. Vorher-/Nachher-Raster vergleichen: alle Pixel außerhalb des erlaubten Bereichs müssen unverändert bleiben.
-5. Endrevision prüfen, PNG und Unity-Export erzeugen und denselben Stand im Browser öffnen. Transparenz und Pivot kontrollieren.
-6. Einen Run abbrechen und ein Limit erreichen. Der letzte gültige Stand bleibt erhalten. Gleichzeitige manuelle Bearbeitung muss einen Konflikt statt stillen Überschreibens auslösen.
+1. Start the service, connect the client over MCP and load the Pixel Artist skill. Note the client version, model and transport.
+2. Create a 32×32 skeleton with a separate sword layer. `inspect_asset` must return a real PNG as MCP image content. Verify that the agent can actually evaluate this image visually; a link or JSON with image dimensions is not enough.
+3. Record a concrete visual observation with the associated revision ID. Make a visible improvement, inspect again and assess.
+4. Lengthen the sword by exactly three pixels. Compare the before/after rasters: all pixels outside the allowed area must stay unchanged.
+5. Check the final revision, generate the PNG and Unity export and open the same state in the browser. Verify transparency and pivot.
+6. Cancel a run and hit a limit. The last valid state is preserved. Simultaneous manual editing must trigger a conflict instead of a silent overwrite.
 
-Kann ein Client Bildantworten nicht weiterreichen, ist dieser Artist-Workflow dort noch nicht abgenommen. `record_review` beweist eine protokollierte Beobachtung, kein visuelles Verständnis des Modells.
+If a client cannot forward image responses, this artist workflow is not yet accepted there. `record_review` proves a logged observation, not visual understanding by the model.
 
-## Visuelle Stichprobe: 20 reale Aufgaben
+## Visual sample: 20 real tasks
 
-Jede Aufgabe mit dem realen externen Agenten ausführen. Die erste vollständige Zeichnung und die Endrevision nach höchstens drei Korrekturrunden aufbewahren. Motiv und Stil bei nativer Größe sowie vergrößert beurteilen: erkennbar, im Spiel lesbar, Vorgaben eingehalten, nach Korrektur besser/gleich/schlechter. Dauer, Client/Modell, Asset-/Revisions-IDs und offene Probleme festhalten. Keine Bewertung allein aus der Selbsteinschätzung des zeichnenden Agenten ableiten.
+Run each task with the real external agent. Keep the first complete drawing and the final revision after at most three correction rounds. Judge subject and style at native size and enlarged: recognizable, readable in-game, requirements met, better/same/worse after correction. Record duration, client/model, asset/revision IDs and open issues. Do not derive any assessment solely from the drawing agent's self-assessment.
 
-| Nr. | Aufgabe | Schwerpunkt |
+| No. | Task | Focus |
 | --- | --- | --- |
-| 01 | 32×32 Skeleton Warrior, 16-Bit, Seite | Silhouette und getrenntes Schwert |
-| 02 | 32×32 Goblin mit Dolch, 16-Bit, Seite | Gesicht und Gameplay-Merkmale |
-| 03 | 32×32 Ritter mit Schild, 16-Bit, Front | Lesbare Ausrüstung |
-| 04 | 16×16 Schleimgegner, Game Boy, Front | Kleine Auflösung und Palette |
-| 05 | 48×48 Roboter, 8-Bit, Front | Proportionen und Material |
-| 06 | 64×64 Boss-Skelett, 16-Bit, Seite | Detaildisziplin bei größerem Raster |
-| 07 | 16×16 Eisenschwert, 8-Bit | Diagonalen und Metallfarben |
-| 08 | 16×16 Gesundheitstrank, Game Boy | Glas und Erkennbarkeit |
-| 09 | 16×16 Schlüssel, 1-Bit | Form mit kleiner Palette |
-| 10 | 24×24 Eisenschild passend zu Nr. 07 | Asset-Familie und Referenzinspektion |
-| 11 | 32×32 Holzkiste, 8-Bit, Front | Outline und Licht |
-| 12 | 32×32 Eiche, Game Boy, Front | Organische Silhouette |
-| 13 | 24×24 Felsen, 16-Bit, Front | Flächen und Shading |
-| 14 | 48×48 Dungeon-Tür, 16-Bit, Front | Symmetrie und Kontrast |
-| 15 | 8×8 Herzsymbol, 1-Bit | Minimale Auflösung |
-| 16 | 16×16 Inventartasche, 8-Bit, Front | UI-Lesbarkeit |
-| 17 | Schwert aus Nr. 01 um 3 Pixel verlängern | Messbare lokale Änderung |
-| 18 | Nur Rüstungsfarben aus Nr. 03 ändern | Identität und unveränderte Umgebung |
-| 19 | Elite-Variante aus Nr. 02 erstellen | Eigenständige Variante und Herkunft |
-| 20 | Beschädigte Version der Kiste aus Nr. 11 | Wiedererkennbare Grundform |
-| 21 | 32×32 Skelett aus Nr. 01: 4-Frame-Idle und 6-Frame-Walk, Tags `idle`/`walk` | Ankerstabilität am Pivot, Loop-Übergang |
-| 22 | 16×16 Schleim: 2-Frame-Hüpfen mit Squash | Volumen und Timing |
-| 23 | 16×16 Münze: 6-Frame-Drehung, GIF und Sheet exportieren | Gleichmäßige Rotation, Export in einer Engine importieren |
+| 01 | 32×32 Skeleton Warrior, 16-bit, side | Silhouette and separate sword |
+| 02 | 32×32 goblin with dagger, 16-bit, side | Face and gameplay features |
+| 03 | 32×32 knight with shield, 16-bit, front | Readable equipment |
+| 04 | 16×16 slime enemy, Game Boy, front | Small resolution and palette |
+| 05 | 48×48 robot, 8-bit, front | Proportions and material |
+| 06 | 64×64 boss skeleton, 16-bit, side | Detail discipline on a larger grid |
+| 07 | 16×16 iron sword, 8-bit | Diagonals and metal colors |
+| 08 | 16×16 health potion, Game Boy | Glass and recognizability |
+| 09 | 16×16 key, 1-bit | Shape with a small palette |
+| 10 | 24×24 iron shield matching No. 07 | Asset family and reference inspection |
+| 11 | 32×32 wooden crate, 8-bit, front | Outline and light |
+| 12 | 32×32 oak tree, Game Boy, front | Organic silhouette |
+| 13 | 24×24 rock, 16-bit, front | Surfaces and shading |
+| 14 | 48×48 dungeon door, 16-bit, front | Symmetry and contrast |
+| 15 | 8×8 heart icon, 1-bit | Minimal resolution |
+| 16 | 16×16 inventory bag, 8-bit, front | UI readability |
+| 17 | Lengthen the sword from No. 01 by 3 pixels | Measurable local change |
+| 18 | Change only the armor colors of No. 03 | Identity and unchanged surroundings |
+| 19 | Create an elite variant of No. 02 | Independent variant and provenance |
+| 20 | Damaged version of the crate from No. 11 | Recognizable base shape |
+| 21 | 32×32 skeleton from No. 01: 4-frame idle and 6-frame walk, tags `idle`/`walk` | Anchor stability at the pivot, loop transition |
+| 22 | 16×16 slime: 2-frame hop with squash | Volume and timing |
+| 23 | 16×16 coin: 6-frame spin, export GIF and sheet | Even rotation, import the export into an engine |
 
-Die technische Abnahme verlangt fehlerfreie Integritätsprüfungen. Die visuelle Stichprobe dokumentiert die erreichte Qualität samt Ausfällen; sie ist keine allgemeine Garantie für alle Motive, Stile oder Agentenmodelle.
+Technical acceptance requires error-free integrity checks. The visual sample documents the quality achieved, including failures; it is not a general guarantee for all subjects, styles or agent models.

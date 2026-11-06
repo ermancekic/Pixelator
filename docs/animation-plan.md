@@ -1,89 +1,89 @@
-# Implementierungsplan: KI-Effizienz und Animationen
+# Implementation plan: AI efficiency and animations
 
-Stand 17. Oktober 2026 · Basis: Pixelator `c5d051d` · Referenz: Pixelorama [`845de22`](https://github.com/Orama-Interactive/Pixelorama/tree/845de22bd1b7fa43edf3024589a23c3e59c07ba2) (MIT). Der Plan ist umgesetzt; Abschnitt 8 nennt die getroffenen Entscheidungen und Abweichungen, die Prüfergebnisse stehen im [Prüfbericht](verification.md).
+As of 17 October 2026 · Baseline: Pixelator `332beea` · Reference: Pixelorama [`845de22`](https://github.com/Orama-Interactive/Pixelorama/tree/845de22bd1b7fa43edf3024589a23c3e59c07ba2) (MIT). The plan has been implemented; section 8 lists the decisions made and the deviations, and the verification results are in the [verification report](verification.md).
 
-## 1. Kurzfazit (Ausgangslage)
+## 1. Summary (starting point)
 
-- **KI-Assets erstellen: ja, aber noch nicht so effizient wie möglich.** Engine, Scope-Schutz, Revisionen und echte PNG-Inspektion tragen den Agenten-Workflow bereits (realer Codex-Lauf: 32×32-Skelett in 79 s, siehe [Prüfbericht](verification.md)). Die Engpässe liegen beim Datenformat: Raster gehen als JSON-Zahlenlisten hin und her, ein Teilbereich lässt sich nicht kompakt lesen, zwei Zoomstufen brauchen zwei Aufrufe, und jede Bearbeitung liefert den vollen Asset-Kontext zurück.
-- **Animationen: nein.** `PixelDocument` kennt genau ein Bild pro Ebene ([types.ts:4](../src/types.ts)). Es gibt keine Frames, Dauern, Tags, Wiedergabe oder Sprite-Sheets; der Skill verbietet ausdrücklich, Animation zu behaupten ([SKILL.md:30](../skills/pixel-artist/SKILL.md)).
-- **Empfehlung:** Erst die Effizienz-Grundlagen (Phase 0), dann ein Dokumentmodell v2 mit Frames nach Pixeloramas Vorbild (Phase 1), dann Animation über MCP (Phase 2), danach die Timeline im Editor (Phase 3). So können Agenten Animationen erstellen, bevor die Browser-Timeline fertig ist.
+- **Creating assets with AI: yes, but not yet as efficiently as possible.** The engine, scope protection, revisions and real PNG inspection already support the agent workflow (real Codex run: 32×32 skeleton in 79 s, see [verification report](verification.md)). The bottlenecks lie in the data format: rasters go back and forth as JSON number lists, a sub-region cannot be read compactly, two zoom levels need two calls, and every edit returns the full asset context.
+- **Animations: no.** `PixelDocument` has exactly one image per layer ([types.ts:4](../src/types.ts)). There are no frames, durations, tags, playback or sprite sheets; the skill explicitly forbids claiming animation ([SKILL.md:30](../skills/pixel-artist/SKILL.md)).
+- **Recommendation:** First the efficiency foundations (Phase 0), then a document model v2 with frames modeled on Pixelorama (Phase 1), then animation over MCP (Phase 2), and after that the timeline in the editor (Phase 3). This way agents can create animations before the browser timeline is finished.
 
-## 2. Ist-Analyse
+## 2. Current-state analysis
 
-### 2.1 Architektur
+### 2.1 Architecture
 
-| Modul | Aufgabe |
+| Module | Responsibility |
 | --- | --- |
-| [`src/engine.ts`](../src/engine.ts) | Deterministische Raster-Engine: Validierung, Komposition, 20 Operationen, Scope-Prüfung, Diff. Wird von Server **und** Browser genutzt (`previewOperations`). |
-| [`src/store.ts`](../src/store.ts) | SQLite (`node:sqlite`): Projekte, Assets, unveränderliche Revisionen (Volldokument je Revision), Idempotenz (`requests`), Artist-Runs mit Budget. |
-| [`src/mcp.ts`](../src/mcp.ts) | MCP-Server mit 20 Tools und 2 Ressourcen; `inspect_asset` liefert echtes PNG als Bildinhalt. |
-| [`src/server.ts`](../src/server.ts) | Fastify: REST für den Editor, SSE-Events, Streamable-HTTP-MCP mit Sitzungs- und Agentenstatus. |
-| [`src/images.ts`](../src/images.ts) | PNG-Render (Nearest Neighbor), Thumbnail, verlustfreier PNG-Import, Unity-Metadaten. |
-| [`web/App.tsx`](../web/App.tsx) | React-Editor (ein Bauteil, ~480 dichte Zeilen): Werkzeuge, Ebenen, Palette, Verlauf, MCP-Dialog. |
-| [`skills/pixel-artist`](../skills/pixel-artist/SKILL.md) | Agenten-Workflow und Artist Guide, über `get_workflow` ausgeliefert. |
+| [`src/engine.ts`](../src/engine.ts) | Deterministic raster engine: validation, compositing, 20 operations, scope check, diff. Used by the server **and** the browser (`previewOperations`). |
+| [`src/store.ts`](../src/store.ts) | SQLite (`node:sqlite`): projects, assets, immutable revisions (full document per revision), idempotency (`requests`), artist runs with a budget. |
+| [`src/mcp.ts`](../src/mcp.ts) | MCP server with 20 tools and 2 resources; `inspect_asset` returns a real PNG as image content. |
+| [`src/server.ts`](../src/server.ts) | Fastify: REST for the editor, SSE events, Streamable HTTP MCP with session and agent status. |
+| [`src/images.ts`](../src/images.ts) | PNG rendering (nearest neighbor), thumbnail, lossless PNG import, Unity metadata. |
+| [`web/App.tsx`](../web/App.tsx) | React editor (one component, ~480 dense lines): tools, layers, palette, history, MCP dialog. |
+| [`skills/pixel-artist`](../skills/pixel-artist/SKILL.md) | Agent workflow and Artist Guide, delivered via `get_workflow`. |
 
-### 2.2 Was für KI-Agenten schon gut funktioniert
+### 2.2 What already works well for AI agents
 
-- Atomare Batches mit bis zu 512 Operationen, Formen (`line`, `rect`, `ellipse`, `polygon`, `fill`, `outline`) statt Einzelpixeln.
-- `editScope` mit Ebenen und Rechteck schützt unbeteiligte Pixel; Diff-Prüfung auf Speicher- und Renderebene.
-- `expectedRevision` und `requestId` verhindern Überschreiben und Doppelanwendung.
-- `inspect_asset` liefert das echte Bild; der Agent bewertet visuell statt anhand von JSON.
-- Run-Budget (120 Batches, 1 + 3 Reviews) begrenzt Kosten und Endlosschleifen.
+- Atomic batches with up to 512 operations, shapes (`line`, `rect`, `ellipse`, `polygon`, `fill`, `outline`) instead of individual pixels.
+- `editScope` with layers and a rectangle protects uninvolved pixels; diff check at the storage and render level.
+- `expectedRevision` and `requestId` prevent overwrites and double application.
+- `inspect_asset` returns the real image; the agent judges visually instead of from JSON.
+- The run budget (120 batches, 1 + 3 reviews) limits costs and endless loops.
 
-### 2.3 Effizienz-Engpässe (gemessen)
+### 2.3 Efficiency bottlenecks (measured)
 
-Messung am 17.10.2026 gegen einen In-Memory-Server über MCP-JSON-RPC, synthetisches 32×32-Sprite. Antwortgrößen enthalten Text- **und** `structuredContent`-Kopie (siehe `jsonResult`, [mcp.ts:38](../src/mcp.ts)); welche Kopie das Modell sieht, hängt vom Client ab.
+Measured on 17 October 2026 against an in-memory server over MCP JSON-RPC, synthetic 32×32 sprite. Response sizes include the text copy **and** the `structuredContent` copy (see `jsonResult`, [mcp.ts:38](../src/mcp.ts)); which copy the model sees depends on the client.
 
-| Aufruf | Zeichen | Befund |
+| Call | Characters | Finding |
 | --- | ---: | --- |
-| `tools/list` | 23 512 | Einmalig pro Sitzung; vor allem das Operations-Schema. Akzeptabel, neue Tools sparsam halten. |
-| `get_workflow` | 24 475 | Einmalig pro Auftrag; `start_run`/`resume_run` senden den Artist Guide zusätzlich erneut. |
-| `patch` 32×32 als JSON-Zahlen | 2 232 | Eingabe des Agenten für einen vollen Ebenenblock. |
-| dasselbe als Zeilen-Strings | 1 171 | **−48 % Zeichen**; Tokens voraussichtlich stärker, weil Läufe gleicher Zeichen gut komprimieren (bei Abnahme mit echtem Tokenizer nachmessen). |
-| `apply_operations`-Antwort | 3 310 | Voller Asset- und Revisionskontext bei **jedem** Batch, obwohl der Agent meist nur die neue Revision-ID braucht. |
-| `get_asset` mit `includePixels` | 7 376 | Ganze Ebenen als Zahlenlisten; kein Bereich, keine einzelne Ebene, keine kompakte Kodierung. |
-| `inspect_asset` (Scale 8) | 1 436 + 1 285 | Bild (Base64) plus JSON; effizient. Aber Scale 1 und vergrößert sind laut Skill zwei Aufrufe. |
+| `tools/list` | 23,512 | Once per session; mostly the operations schema. Acceptable; add new tools sparingly. |
+| `get_workflow` | 24,475 | Once per task; `start_run`/`resume_run` additionally send the Artist Guide again. |
+| `patch` 32×32 as JSON numbers | 2,232 | The agent's input for a full layer block. |
+| the same as row strings | 1,171 | **−48% characters**; tokens probably drop even more, because runs of identical characters compress well (re-measure with a real tokenizer at acceptance). |
+| `apply_operations` response | 3,310 | Full asset and revision context on **every** batch, although the agent usually only needs the new revision ID. |
+| `get_asset` with `includePixels` | 7,376 | Whole layers as number lists; no region, no single layer, no compact encoding. |
+| `inspect_asset` (scale 8) | 1,436 + 1,285 | Image (Base64) plus JSON; efficient. But according to the skill, scale 1 and enlarged are two calls. |
 
-Weitere Lücken:
+Further gaps:
 
-1. **Kein kompaktes Lesen eines Ausschnitts.** Für präzise lokale Edits muss der Agent entweder schätzen oder komplette Ebenen laden.
-2. **Keine Wiederverwendung von Pixelbereichen über Ebenen hinweg.** `copy` arbeitet nur innerhalb einer Ebene; für Animation (Pose aus Frame 1 übernehmen, verschieben, lokal ändern) ist das der wichtigste Hebel.
-3. **Kein Gesamtblick auf zusammengehörige Bilder.** Für Varianten und Frames braucht der Agent ein Kontaktbild statt vieler Einzelinspektionen.
+1. **No compact reading of a region.** For precise local edits, the agent must either guess or load complete layers.
+2. **No reuse of pixel regions across layers.** `copy` only works within one layer; for animation (carry over the pose from frame 1, move it, change it locally) this is the most important lever.
+3. **No overall view of related images.** For variants and frames, the agent needs a contact sheet instead of many individual inspections.
 
-### 2.4 Animation heute
+### 2.4 Animation today
 
-Nicht vorhanden: kein Frame-Begriff in [types.ts](../src/types.ts), [contracts.ts](../src/contracts.ts) oder der Engine; Export nur Einzel-PNG/JSON/Unity-Single-Sprite ([images.ts:71](../src/images.ts)). Ersatzweise ließen sich Frames als getrennte Varianten anlegen, aber ohne gemeinsame Ebenenstruktur, Timing, Tags, Wiedergabe, Sprite-Sheet und mit getrennten Runs/Reviews. Das ist keine Animation, sondern eine Asset-Sammlung.
+Not available: no frame concept in [types.ts](../src/types.ts), [contracts.ts](../src/contracts.ts) or the engine; export only as single PNG/JSON/Unity single sprite ([images.ts:71](../src/images.ts)). As a workaround, frames could be created as separate variants, but without a shared layer structure, timing, tags, playback or sprite sheet, and with separate runs/reviews. That is not an animation but a collection of assets.
 
-## 3. Pixelorama als Referenz
+## 3. Pixelorama as a reference
 
-Übernommen werden Konzepte und beobachtetes Verhalten, kein GDScript-Code (wie im [bisherigen Bericht](../reports/Pixelorama%20Ideen%20f%C3%BCr%20Pixelator.md)).
+Concepts and observed behavior are adopted, but no GDScript code (as in the [previous report](../reports/Pixelorama%20Ideas%20for%20Pixelator.md)).
 
-| Konzept | Pixelorama | Entscheidung für Pixelator |
+| Concept | Pixelorama | Decision for Pixelator |
 | --- | --- | --- |
-| Frames und Cels | `Project.frames`, `Project.layers` ([Project.gd:56–57](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Project.gd#L56-L57)); jeder Frame hält pro Ebene ein Cel ([Frame.gd:6](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Frame.gd#L6)). | Gleiche Struktur: Ebenen global, `frames[].cels[layerId]`. Semantische Ebenen (`body`, `sword`) bleiben über alle Frames konsistent. |
-| Timing | Projekt-`fps` plus Dauer-Multiplikator je Frame ([Frame.gd:7,16](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Frame.gd#L7-L17), [Project.gd:82](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Project.gd#L82)). | `durationMs` pro Frame. Engine-neutral, direkt für Aseprite-JSON, Unity und Godot nutzbar; keine Umrechnung bei FPS-Änderung. |
-| Tags | Name, Farbe, `from`/`to` 1-basiert inklusive ([AnimationTag.gd:42–45](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/AnimationTag.gd#L42-L45)). | Indexbasiert, aber **0-basiert** inklusive, plus `direction` und `loop`. Farbe nur im UI abgeleitet. |
-| Tag-Anpassung | Einfügen innerhalb/direkt hinter einem Tag verlängert ihn, davor verschiebt ihn; Löschen des einzigen Frames entfernt den Tag (`undo_redo_add_frames`, `delete_frames`, [AnimationTimeline.gd:432, 478](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Timeline/AnimationTimeline.gd#L432)). | Identische Regeln in der Engine, durch Tests festgeschrieben. |
-| Frame kopieren | Kopie direkt hinter der Quelle, gleiche Dauer, Cels tief kopiert oder verlinkt ([AnimationTimeline.gd:549](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Timeline/AnimationTimeline.gd#L549)). | `duplicate_frame` mit tiefer Kopie. Verlinkte Cels (`link_set`, [BaseCel.gd:17](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Cels/BaseCel.gd#L17)) erst in Phase 4. |
-| Wiedergabe | Loop `NO`/`CYCLE`/`PINGPONG`, vorwärts/rückwärts, optional nur aktueller Tag ([AnimationTimeline.gd:13, 804, 877](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Timeline/AnimationTimeline.gd#L804)). | Gleiches Verhalten als reine Funktion in `web/animation-helpers.ts`. |
-| Onion Skin | Vorherige/folgende Frames mit `opacity / i`, Blau/Rot-Modus, Ebenen per `ignore_onion` ausnehmbar ([OnionSkinning.gd:29–37](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Canvas/OnionSkinning.gd#L29-L37)). | Im Editor als reine Ansicht; zusätzlich im MCP-`inspect_asset` als Overlay für den Agenten. |
-| Export | Sprite-Sheet nach Spalten/Zeilen/Tags, Richtung vorwärts/rückwärts/Ping-Pong, Formate inkl. GIF/APNG ([Export.gd:4–8, 219](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Autoload/Export.gd#L219)). JSON-Export ist das interne Projektformat ([Export.gd:583](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Autoload/Export.gd#L583)). | Sheet-PNG plus **Aseprite-kompatibles JSON** (von vielen Engines/Importern gelesen) und Unity-Metadaten mit mehreren Sprites. GIF in Phase 4. |
-| Nicht übernommen | Cel-Opazität, Z-Index, Blend-Modi, Gruppen-, 3D-, Audio- und Tilemap-Ebenen. | Passt nicht zum binären Alpha-Indexraster; kein Produktziel. |
+| Frames and cels | `Project.frames`, `Project.layers` ([Project.gd:56–57](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Project.gd#L56-L57)); each frame holds one cel per layer ([Frame.gd:6](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Frame.gd#L6)). | Same structure: layers global, `frames[].cels[layerId]`. Semantic layers (`body`, `sword`) stay consistent across all frames. |
+| Timing | Project `fps` plus a duration multiplier per frame ([Frame.gd:7,16](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Frame.gd#L7-L17), [Project.gd:82](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Project.gd#L82)). | `durationMs` per frame. Engine-neutral, directly usable for Aseprite JSON, Unity and Godot; no conversion when the FPS changes. |
+| Tags | Name, color, `from`/`to` 1-based inclusive ([AnimationTag.gd:42–45](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/AnimationTag.gd#L42-L45)). | Index-based, but **0-based** inclusive, plus `direction` and `loop`. Color only derived in the UI. |
+| Tag adjustment | Inserting inside/directly after a tag extends it, inserting before it shifts it; deleting its only frame removes the tag (`undo_redo_add_frames`, `delete_frames`, [AnimationTimeline.gd:432, 478](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Timeline/AnimationTimeline.gd#L432)). | Identical rules in the engine, locked in by tests. |
+| Copying a frame | Copy directly after the source, same duration, cels deep-copied or linked ([AnimationTimeline.gd:549](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Timeline/AnimationTimeline.gd#L549)). | `duplicate_frame` with a deep copy. Linked cels (`link_set`, [BaseCel.gd:17](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Classes/Cels/BaseCel.gd#L17)) only in Phase 4. |
+| Playback | Loop `NO`/`CYCLE`/`PINGPONG`, forward/reverse, optionally current tag only ([AnimationTimeline.gd:13, 804, 877](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Timeline/AnimationTimeline.gd#L804)). | Same behavior as a pure function in `web/animation-helpers.ts`. |
+| Onion skin | Previous/next frames with `opacity / i`, blue/red mode, layers can be excluded via `ignore_onion` ([OnionSkinning.gd:29–37](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/UI/Canvas/OnionSkinning.gd#L29-L37)). | In the editor as a pure view; additionally in MCP `inspect_asset` as an overlay for the agent. |
+| Export | Sprite sheet by columns/rows/tags, direction forward/reverse/ping-pong, formats incl. GIF/APNG ([Export.gd:4–8, 219](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Autoload/Export.gd#L219)). JSON export is the internal project format ([Export.gd:583](https://github.com/Orama-Interactive/Pixelorama/blob/845de22bd1b7fa43edf3024589a23c3e59c07ba2/src/Autoload/Export.gd#L583)). | Sheet PNG plus **Aseprite-compatible JSON** (read by many engines/importers) and Unity metadata with multiple sprites. GIF in Phase 4. |
+| Not adopted | Cel opacity, z-index, blend modes, group, 3D, audio and tilemap layers. | Does not fit the binary-alpha index raster; not a product goal. |
 
-## 4. Zielbild
+## 4. Target design
 
-### 4.1 Dokumentmodell v2
+### 4.1 Document model v2
 
 ```ts
 export interface PixelLayer { id: string; name: string; visible: boolean; locked: boolean }
 export interface PixelFrame {
-  id: string;                       // Bezeichner wie Ebenen-IDs, z. B. "walk_1"
-  durationMs: number;               // Ganzzahl 10..60000
-  cels: Record<string, number[]>;   // Schlüssel = layer.id, Länge width*height
+  id: string;                       // identifier like layer IDs, e.g. "walk_1"
+  durationMs: number;               // integer 10..60000
+  cels: Record<string, number[]>;   // key = layer.id, length width*height
 }
 export interface AnimationTag {
-  name: string;                     // eindeutig
-  from: number; to: number;         // 0-basiert, inklusive
+  name: string;                     // unique
+  from: number; to: number;         // 0-based, inclusive
   direction: 'forward' | 'reverse' | 'pingpong';
   loop: boolean;
 }
@@ -91,188 +91,188 @@ export interface PixelDocument {
   schemaVersion: 2;
   width: number; height: number;
   palette: string[]; maxColors: number; paletteLocked: boolean;
-  layers: PixelLayer[];             // unten → oben, für alle Frames gleich
-  frames: PixelFrame[];             // ≥ 1, Abspielreihenfolge
+  layers: PixelLayer[];             // bottom → top, same for all frames
+  frames: PixelFrame[];             // ≥ 1, playback order
   tags: AnimationTag[];
-  pivot: { x: number; y: number };  // gemeinsam für alle Frames (stabiler Ankerpunkt)
+  pivot: { x: number; y: number };  // shared by all frames (stable anchor point)
 }
-/** Ein Frame in bisheriger v1-Form. Eingabe für Zeichenoperationen und Renderer. */
+/** One frame in the previous v1 form. Input for drawing operations and renderers. */
 export interface FrameView {
   width: number; height: number; palette: string[];
   layers: (PixelLayer & { pixels: number[] })[];
 }
 ```
 
-Ein Einzelbild ist ein Dokument mit einem Frame. Es gibt also **einen** Codepfad, keine Sonderbehandlung „animiert/nicht animiert“.
+A single image is a document with one frame. So there is **one** code path, no special handling for “animated/not animated”.
 
-**Invarianten** (in `validateStructure`): 1–64 Frames mit eindeutigen IDs; jeder Frame hat Cels für genau die Ebenen-ID-Menge; jede Cel hat `width*height` gültige Indizes; `durationMs` ganzzahlig im Bereich; Tags eindeutig benannt, `0 ≤ from ≤ to < frames.length`, höchstens 32.
+**Invariants** (in `validateStructure`): 1–64 frames with unique IDs; every frame has cels for exactly the set of layer IDs; every cel has `width*height` valid indices; `durationMs` is an integer within range; tags uniquely named, `0 ≤ from ≤ to < frames.length`, at most 32.
 
-**ValidationReport v2:** `colorCount` über alle Frames, `opaquePixels` als Summe, `boundingBox` als Vereinigung (nützlich für Trimmen), neu `frames: { frameId, opaquePixels, boundingBox }[]` und Warnung `EMPTY_FRAME`.
+**ValidationReport v2:** `colorCount` across all frames, `opaquePixels` as a sum, `boundingBox` as a union (useful for trimming), new `frames: { frameId, opaquePixels, boundingBox }[]` and the warning `EMPTY_FRAME`.
 
-**PixelDiff v2:** zusätzlich `changedFrames: string[]`; `changedPixels` zählt geänderte (Frame, Position)-Paare.
+**PixelDiff v2:** additionally `changedFrames: string[]`; `changedPixels` counts changed (frame, position) pairs.
 
-### 4.2 Frame-Auflösung und EditScope
+### 4.2 Frame resolution and EditScope
 
 ```ts
 export interface EditScope {
   layerIds: string[]; rect?: Rect;
-  frameIds?: string[];            // neu; fehlt = alle Frames beschreibbar
+  frameIds?: string[];            // new; omitted = all frames writable
   allowPaletteChanges?: boolean; allowLayerChanges?: boolean;
-  allowFrameChanges?: boolean;    // neu; Frame-, Timing- und Tag-Struktur
+  allowFrameChanges?: boolean;    // new; frame, timing and tag structure
 }
 ```
 
-- Jede Rasteroperation erhält optional `frameId`. Auflösung: `op.frameId` → einziger Eintrag in `editScope.frameIds` → einziger Frame des Dokuments → sonst Fehler `FRAME_REQUIRED`. Bestehende Aufrufe auf Einzelbildern bleiben damit gültig.
-- Der Diff prüft Änderungen pro (Frame, Ebene, Position) gegen den Scope. Ein Frame außerhalb von `frameIds` bleibt nachweislich unverändert (`SCOPE_VIOLATION`).
-- Paletten- und Ebenenstrukturänderungen wirken auf alle Frames und verlangen daher zusätzlich, dass `frameIds` fehlt oder alle Frames enthält.
-- Frame-Strukturoperationen verlangen `allowFrameChanges`, kein `rect` und die betroffenen Frames im Scope.
+- Every raster operation gets an optional `frameId`. Resolution: `op.frameId` → the only entry in `editScope.frameIds` → the document's only frame → otherwise error `FRAME_REQUIRED`. Existing calls on single images thus stay valid.
+- The diff checks changes per (frame, layer, position) against the scope. A frame outside `frameIds` provably stays unchanged (`SCOPE_VIOLATION`).
+- Palette and layer structure changes affect all frames and therefore additionally require that `frameIds` is omitted or contains all frames.
+- Frame structure operations require `allowFrameChanges`, no `rect`, and the affected frames in the scope.
 
-### 4.3 Neue Operationen
+### 4.3 New operations
 
-| Operation | Felder | Verhalten |
+| Operation | Fields | Behavior |
 | --- | --- | --- |
-| `rows` *(Phase 0)* | `layerId, frameId?, x, y, rows: string[], mode?: 'replace' \| 'over'` | Kompakter Patch. Alphabet: `.` = 0 (transparent), `1`–`9`, `a`–`w` = Index 1–32. `over` lässt `.` den Bestand behalten. |
-| `stamp` | `layerId, frameId?, sourceLayerId?, sourceFrameId?, rect?, dx, dy, mode?: 'over' \| 'replace'` | Bereich aus beliebiger Ebene/beliebigem Frame desselben Dokuments kopieren und versetzen. Kernoperation für Posen-Wiederverwendung. Clipping-Regeln wie `move`. |
-| `add_frame` | `id, index?, durationMs?` | Leere Cels für alle Ebenen; Standard: ans Ende, 100 ms. |
-| `duplicate_frame` | `frameId, id, index?` | Tiefe Kopie aller Cels und der Dauer; Standard direkt hinter der Quelle. |
-| `remove_frame` | `frameId` | Nicht der letzte Frame. |
-| `reorder_frames` | `frameIds` | Vollständige Permutation; Tags bleiben positionsbasiert. |
-| `frame_duration` | `frameIds, durationMs` | Timing mehrerer Frames in einer Operation. |
-| `set_tags` | `tags: AnimationTag[]` | Ersetzt die Tag-Liste atomar. |
+| `rows` *(Phase 0)* | `layerId, frameId?, x, y, rows: string[], mode?: 'replace' \| 'over'` | Compact patch. Alphabet: `.` = 0 (transparent), `1`–`9`, `a`–`w` = index 1–32. `over` lets `.` keep the existing pixels. |
+| `stamp` | `layerId, frameId?, sourceLayerId?, sourceFrameId?, rect?, dx, dy, mode?: 'over' \| 'replace'` | Copy a region from any layer/any frame of the same document and offset it. Core operation for reusing poses. Clipping rules like `move`. |
+| `add_frame` | `id, index?, durationMs?` | Empty cels for all layers; default: at the end, 100 ms. |
+| `duplicate_frame` | `frameId, id, index?` | Deep copy of all cels and the duration; by default directly after the source. |
+| `remove_frame` | `frameId` | Not the last remaining frame. |
+| `reorder_frames` | `frameIds` | Complete permutation; tags stay position-based. |
+| `frame_duration` | `frameIds, durationMs` | Timing of several frames in one operation. |
+| `set_tags` | `tags: AnimationTag[]` | Replaces the tag list atomically. |
 
-Bestehende Rasteroperationen bekommen nur `frameId?`. `add_layer`, `duplicate_layer` und `remove_layer` wirken auf alle Frames (neue Cels leer bzw. kopiert). Tag-Anpassung bei Einfügen/Löschen nach den Pixelorama-Regeln aus Abschnitt 3.
+Existing raster operations only get `frameId?`. `add_layer`, `duplicate_layer` and `remove_layer` affect all frames (new cels empty or copied, respectively). Tag adjustment on insert/delete follows the Pixelorama rules from section 3.
 
-**Umsetzungsprinzip in der Engine:** `editDocument` bleibt die einzige Bearbeitungsfunktion. Rasteroperationen laufen über `frameView(doc, frameId)` und schreiben in die Cels zurück. Die vorhandenen ~300 Zeilen Zeichenlogik bleiben inhaltlich unverändert.
+**Implementation principle in the engine:** `editDocument` remains the only editing function. Raster operations go through `frameView(doc, frameId)` and write back into the cels. The existing ~300 lines of drawing logic stay unchanged in substance.
 
-### 4.4 Rendering und Export
+### 4.4 Rendering and export
 
-- `composite(doc, frameId?)`, `renderPng(doc, scale, frameId?)`; Thumbnail nutzt den ersten Frame.
-- `renderSheet(doc, { frameIds?, tag?, columns?, scale, gutter?, onion? })` liefert PNG und Layout (`frameId, x, y, w, h, durationMs` je Zelle).
-- **Export `sheet`:** Sheet-PNG (Standard ohne Abstand) plus JSON im Aseprite-„Array“-Format: `frames[]` mit `frame`-Rechteck und `duration`, `meta.size`, `meta.frameTags` (`name`, `from`, `to`, `direction`), Erweiterung `meta.pivot`.
-- **Export `unity`:** bei mehreren Frames `spriteMode: 'Multiple'`, Sprite-Rechtecke mit Ursprung unten links, normierter Pivot, `clips[]` je Tag mit Sprite-Namen, Dauern und Loop. Wie bisher nur Metadaten, kein Eingriff in ein Unity-Projekt.
-- **Export `png`:** einzelner Frame über `frameId`, Standard erster Frame.
+- `composite(doc, frameId?)`, `renderPng(doc, scale, frameId?)`; the thumbnail uses the first frame.
+- `renderSheet(doc, { frameIds?, tag?, columns?, scale, gutter?, onion? })` returns a PNG and layout (`frameId, x, y, w, h, durationMs` per cell).
+- **Export `sheet`:** sheet PNG (no spacing by default) plus JSON in Aseprite “Array” format: `frames[]` with a `frame` rectangle and `duration`, `meta.size`, `meta.frameTags` (`name`, `from`, `to`, `direction`), extension `meta.pivot`.
+- **Export `unity`:** with multiple frames `spriteMode: 'Multiple'`, sprite rectangles with the origin at the bottom left, normalized pivot, `clips[]` per tag with sprite names, durations and loop. As before, metadata only, no changes to a Unity project.
+- **Export `png`:** a single frame via `frameId`, first frame by default.
 
-### 4.5 MCP-Schnittstelle
+### 4.5 MCP interface
 
-Nur ein neues Tool; alles andere erweitert bestehende Tools.
+Only one new tool; everything else extends existing tools.
 
-| Tool | Änderung |
+| Tool | Change |
 | --- | --- |
-| `read_pixels` *(neu, Phase 0)* | `assetId, revisionId?, frameId?, layerId?` (fehlt = sichtbares Gesamtbild), `rect?` → `rows` im Alphabet von `rows`, dazu Legende (Index → Hex). Höchstens 16 384 Zellen pro Aufruf. Ersetzt `includePixels` für den Normalfall. |
-| `apply_operations` | Neue Operationen und Scope-Felder. Antwort standardmäßig **kompakt**: `assetId, revisionId, parentId, diff, validation` (ohne Dokument), `frames` (IDs, Dauern), `layers` (IDs). `response: 'full'` liefert das bisherige Format. |
-| `inspect_asset` | `scales?: number[]` (bis 3 Bilder in einem Aufruf, Phase 0). Neu: `frameId?`, `layout?: 'frame' \| 'sheet'`, `frameIds?`, `tag?`, `columns?`, `onion?: { before?: 0..3, after?: 0..3 }`. Bei mehreren Frames ist `sheet` Standard: **ein** Bild mit allen Frames, getrennt durch eine Trennfarbe außerhalb der Palette; Layout im JSON. Onion-Frames als feste Tönung (vorher Blau, nachher Rot) unter dem Ziel-Frame. |
-| `create_asset` | Optional `frames: { id, durationMs? }[]` und `tags`. |
-| `get_asset` | Zusammenfassung mit Frames, Dauern und Tags; `includePixels` bleibt kompatibel, optional mit `frameIds`. |
-| `export_asset` | Formate `png` (mit `frameId`), `json`, `unity`, `sheet` (schreibt PNG und JSON nebeneinander), später `gif`. |
-| `get_workflow` | Limits um `frames: 64`, `tags: 32` ergänzt. |
-| Runs | `inspected` speichert zusätzlich die gezeigten Frame-IDs. `finish_run('completed')` verlangt bei Animationen eine Inspektion, die alle Frames abdeckt. |
+| `read_pixels` *(new, Phase 0)* | `assetId, revisionId?, frameId?, layerId?` (omitted = visible composite image), `rect?` → `rows` in the alphabet of `rows`, plus a legend (index → hex). At most 16,384 cells per call. Replaces `includePixels` for the normal case. |
+| `apply_operations` | New operations and scope fields. The response is **compact** by default: `assetId, revisionId, parentId, diff, validation` (without the document), `frames` (IDs, durations), `layers` (IDs). `response: 'full'` returns the previous format. |
+| `inspect_asset` | `scales?: number[]` (up to 3 images in one call, Phase 0). New: `frameId?`, `layout?: 'frame' \| 'sheet'`, `frameIds?`, `tag?`, `columns?`, `onion?: { before?: 0..3, after?: 0..3 }`. With multiple frames, `sheet` is the default: **one** image with all frames, separated by a gutter color outside the palette; layout in the JSON. Onion frames as a fixed tint (before blue, after red) beneath the target frame. |
+| `create_asset` | Optional `frames: { id, durationMs? }[]` and `tags`. |
+| `get_asset` | Summary with frames, durations and tags; `includePixels` stays compatible, optionally with `frameIds`. |
+| `export_asset` | Formats `png` (with `frameId`), `json`, `unity`, `sheet` (writes PNG and JSON side by side), later `gif`. |
+| `get_workflow` | Limits extended with `frames: 64`, `tags: 32`. |
+| Runs | `inspected` additionally stores the frame IDs shown. For animations, `finish_run('completed')` requires an inspection that covers all frames. |
 
-**Warum Sheet statt GIF für den Agenten:** MCP-Bildinhalt wird von Vision-Modellen als Standbild verarbeitet; ein animiertes GIF zeigt dem Modell in der Regel nur einen Frame. Ein Kontaktbild zeigt Bewegung, Silhouette pro Frame und Ankerstabilität auf einen Blick.
+**Why a sheet instead of a GIF for the agent:** Vision models process MCP image content as a still image; an animated GIF usually shows the model only one frame. A contact sheet shows motion, the silhouette per frame and anchor stability at a glance.
 
-**Effizienter Animations-Ablauf für Agenten** (kommt in den Skill): Schlüsselpose in Frame 1 zeichnen → `duplicate_frame` → per `stamp`/`move` auf Ebenen verschieben → mit `rows` lokal korrigieren → `inspect_asset` als Sheet mit Onion → Review → Timing per `frame_duration` → `set_tags` → Export `sheet`.
+**Efficient animation workflow for agents** (goes into the skill): draw the key pose in frame 1 → `duplicate_frame` → shift on layers via `stamp`/`move` → correct locally with `rows` → `inspect_asset` as a sheet with onion skin → review → timing via `frame_duration` → `set_tags` → export `sheet`.
 
-### 4.6 Web-Editor
+### 4.6 Web editor
 
-- **Neue Datei `web/Timeline.tsx`:** Frame-Miniaturen, aktueller Frame, Dauer-Eingabe in ms, Frame hinzufügen/duplizieren/löschen/verschieben, Tag-Leiste über den Frames mit Dialog (Name, Bereich, Richtung, Loop), Abspielen/Pause, Loop-Modus (einmal/Zyklus/Ping-Pong), „nur aktuellen Tag“, Onion-Schalter (vorher/nachher 0–3).
-- **Neue Datei `web/animation-helpers.ts`:** reine Funktionen für Wiedergabebereich, nächsten Frame (alle Loop-Modi, beide Richtungen), Onion-Auswahl und Tag-Layout. Unit-getestet wie `view-helpers.ts`.
-- **`web/App.tsx`:** nur Zustandsverdrahtung: `frameId`; alle Operationen mit `frameId` und `editScope.frameIds`; Pipette, Ebenenminiaturen und Auswahl-Patch lesen den aktuellen Frame; Onion-Canvas unter der Zeichenfläche (`pointer-events: none`, keine Dokumentänderung). Kopierter Agentenauftrag nennt Frame und Tag.
-- **`web/AssetPreview.tsx`:** spielt die Animation mit echten Dauern ab, unabhängig vom bearbeiteten Frame (wie Pixeloramas Vorschau); 3×3-Kachelung bleibt.
-- **Tastenkürzel** (`resolveShortcut`): `,` / `.` vorheriger/nächster Frame, `K` Abspielen/Pause, `Umschalt+O` Onion Skin.
+- **New file `web/Timeline.tsx`:** frame thumbnails, current frame, duration input in ms, add/duplicate/delete/move frames, tag bar above the frames with a dialog (name, range, direction, loop), play/pause, loop mode (once/cycle/ping-pong), “current tag only”, onion skin toggle (before/after 0–3).
+- **New file `web/animation-helpers.ts`:** pure functions for the playback range, next frame (all loop modes, both directions), onion frame selection and tag layout. Unit-tested like `view-helpers.ts`.
+- **`web/App.tsx`:** only state wiring: `frameId`; all operations with `frameId` and `editScope.frameIds`; the eyedropper, layer thumbnails and selection patch read the current frame; onion canvas beneath the drawing surface (`pointer-events: none`, no document change). The copied agent prompt names the frame and tag.
+- **`web/AssetPreview.tsx`:** plays the animation with real durations, independent of the frame being edited (like Pixelorama's preview); 3×3 tiling remains.
+- **Keyboard shortcuts** (`resolveShortcut`): `,` / `.` previous/next frame, `K` play/pause, `Shift+O` onion skin.
 
-### 4.7 Migration und Kompatibilität
+### 4.7 Migration and compatibility
 
-- `upgradeDocument()` (rein, in der Engine): v1 → v2 mit einem Frame `frame-1`, 100 ms, ohne Tags; Pixel unverändert in die Cels.
-- **Kein Umschreiben der Datenbank.** Gelesene Revisionen werden beim Lesen angehoben, neue Revisionen als v2 gespeichert. Gilt auch für gespeicherte Replay-Antworten in `requests` ([store.ts:205](../src/store.ts)), damit Wiederholungen keine v1-Form liefern.
-- Projektimport akzeptiert Bundles mit `schemaVersion` 1 und 2 und Dokumente v1 und v2; Export schreibt Version 2.
-- REST/MCP-Clients sehen die neue Form. Agenten lesen Schemas dynamisch; Skill und Artist Guide werden in derselben Phase aktualisiert.
+- `upgradeDocument()` (pure, in the engine): v1 → v2 with one frame `frame-1`, 100 ms, no tags; pixels go unchanged into the cels.
+- **No rewriting of the database.** Revisions are upgraded when read, new revisions are stored as v2. This also applies to stored replay responses in `requests` ([store.ts:205](../src/store.ts)), so that retries do not return the v1 form.
+- Project import accepts bundles with `schemaVersion` 1 and 2 and documents v1 and v2; export writes version 2.
+- REST/MCP clients see the new form. Agents read schemas dynamically; the skill and Artist Guide are updated in the same phase.
 
-## 5. Phasen
+## 5. Phases
 
-Aufwand als grobe Größe (S/M/L). Jede Phase endet mit grünem `npm run typecheck`, `npm test`, `npm run build` und ist einzeln auslieferbar.
+Effort as a rough size (S/M/L). Every phase ends with a green `npm run typecheck`, `npm test`, `npm run build` and can be shipped on its own.
 
-### Phase 0 – Effizienz für alle Assets (S–M)
+### Phase 0 – Efficiency for all assets (S–M)
 
-1. `rows`-Operation: Vertrag in `contracts.ts`/`types.ts`, Engine-Fall neben `patch`.
-2. `read_pixels`-Tool in `mcp.ts`, Kodierer/Dekodierer als gemeinsame Hilfsfunktion in `src/engine.ts` (oder `src/raster-text.ts`).
-3. `inspect_asset` mit `scales[]` (mehrere Bildinhalte in einer Antwort).
-4. Kompakte `apply_operations`-Antwort mit `response: 'full'` als Ausweg.
-5. Skill: `rows`, `read_pixels` und `scales` im Workflow verwenden; Beispiel mit `rows` statt `patch`.
+1. `rows` operation: contract in `contracts.ts`/`types.ts`, engine case next to `patch`.
+2. `read_pixels` tool in `mcp.ts`, encoder/decoder as a shared helper function in `src/engine.ts` (or `src/raster-text.ts`).
+3. `inspect_asset` with `scales[]` (multiple image contents in one response).
+4. Compact `apply_operations` response with `response: 'full'` as a fallback.
+5. Skill: use `rows`, `read_pixels` and `scales` in the workflow; example with `rows` instead of `patch`.
 
-**Akzeptanz:** `rows` und `patch` erzeugen identische Dokumente; `read_pixels` → `rows` ist verlustfrei; zwei Scales in einem Aufruf; kompakte Antwort enthält die neue Revision-ID und kein Dokument. Messung aus Abschnitt 2.3 wiederholen und Ergebnis in [verification.md](verification.md) eintragen.
+**Acceptance:** `rows` and `patch` produce identical documents; `read_pixels` → `rows` is lossless; two scales in one call; the compact response contains the new revision ID and no document. Repeat the measurement from section 2.3 and record the result in [verification.md](verification.md).
 
-### Phase 1 – Dokumentmodell v2 und Engine (L)
+### Phase 1 – Document model v2 and engine (L)
 
-Empfohlene Commit-Reihenfolge, damit jeder Schritt prüfbar bleibt:
+Recommended commit order, so that every step stays verifiable:
 
-1. Typen, Schema (`documentSchema` als Union v1/v2), `upgradeDocument`, `frameView`; Test-Hilfsfunktion `cel(doc, layerId, frameIndex = 0)`. Alle Tests mechanisch umstellen (rund 70 Zugriffe auf `.pixels` in `tests/`), **ohne Verhaltensänderung**.
-2. Engine: Frame-Auflösung, Scope (`frameIds`, `allowFrameChanges`), Diff und Validierung pro Frame.
-3. Frame-Operationen inklusive Tag-Anpassung; `stamp`.
-4. Store: Anheben beim Lesen inkl. Replay, `createDocument` mit Frames, Import/Export Bundle v2, `importDocument`-Leerprüfung über alle Frames.
-5. Renderer: `composite`/`renderPng` mit `frameId`; Editor zeigt vorerst Frame 1 (keine Timeline), damit nichts bricht.
+1. Types, schema (`documentSchema` as a union of v1/v2), `upgradeDocument`, `frameView`; test helper `cel(doc, layerId, frameIndex = 0)`. Convert all tests mechanically (about 70 accesses to `.pixels` in `tests/`), **without behavior changes**.
+2. Engine: frame resolution, scope (`frameIds`, `allowFrameChanges`), diff and validation per frame.
+3. Frame operations including tag adjustment; `stamp`.
+4. Store: upgrade on read incl. replay, `createDocument` with frames, import/export of bundle v2, `importDocument` empty check across all frames.
+5. Renderer: `composite`/`renderPng` with `frameId`; the editor shows frame 1 for now (no timeline), so that nothing breaks.
 
-**Tests (`tests/engine.test.ts`, `tests/store.test.ts`):** v1 → v2 verlustfrei; eine roh gespeicherte v1-Revision und eine v1-Replay-Antwort werden als v2 gelesen; v1-Projektbundle importierbar; jede Frame-Operation inkl. Grenzen und atomarem Rollback; Tag-Regeln (Einfügen in/hinter/vor Tag, Löschen des einzigen Tag-Frames); `FRAME_REQUIRED`; Schreibversuch auf Frame außerhalb des Scopes; `stamp` über Frames/Ebenen in beiden Modi und mit Clipping; Palette und gesperrte Ebenen über alle Frames; `changedFrames`; `EMPTY_FRAME`.
+**Tests (`tests/engine.test.ts`, `tests/store.test.ts`):** v1 → v2 lossless; a raw stored v1 revision and a v1 replay response are read as v2; v1 project bundle importable; every frame operation incl. limits and atomic rollback; tag rules (inserting in/after/before a tag, deleting a tag's only frame); `FRAME_REQUIRED`; write attempt on a frame outside the scope; `stamp` across frames/layers in both modes and with clipping; palette and locked layers across all frames; `changedFrames`; `EMPTY_FRAME`.
 
-**Akzeptanz zusätzlich:** Revisionsgröße für 8 Frames × 4 Ebenen × 32×32 messen und dokumentieren (Erwartung grob 70 kB JSON pro Revision).
+**Additional acceptance:** measure and document the revision size for 8 frames × 4 layers × 32×32 (expected roughly 70 kB of JSON per revision).
 
-### Phase 2 – Animation über MCP (M)
+### Phase 2 – Animation over MCP (M)
 
-1. `create_asset` mit Frames/Tags; `get_asset`-Zusammenfassung; `read_pixels` mit `frameId`.
-2. `renderSheet` mit Trennfarbe und Onion; `inspect_asset` mit Sheet/Frame/Onion; Run-Abdeckung aller Frames.
-3. Export `sheet` (PNG + Aseprite-JSON), Unity mit mehreren Sprites und Clips, `png` pro Frame; REST: `/api/assets/:id/png?frameId=`, `/api/assets/:id/export?format=sheet|sheet-json`.
-4. Skill und Artist Guide: Animationsablauf aus 4.5; neue Review-Kategorie **Motion** (Loop-Übergang letzter → erster Frame, Timing, Ankerstabilität am Pivot, Silhouette pro Frame, kein unbeabsichtigtes Pixelflimmern). Belegquellen für Animationsregeln bei der Umsetzung recherchieren und wie im bestehenden Guide verlinken. Den Satz „Animation … later extensions“ entfernen.
-5. `docs/mcp.md` und README-Stichpunkt kurz ergänzen (gemäß AGENTS.md).
+1. `create_asset` with frames/tags; `get_asset` summary; `read_pixels` with `frameId`.
+2. `renderSheet` with gutter color and onion skin; `inspect_asset` with sheet/frame/onion; run coverage of all frames.
+3. Export `sheet` (PNG + Aseprite JSON), Unity with multiple sprites and clips, `png` per frame; REST: `/api/assets/:id/png?frameId=`, `/api/assets/:id/export?format=sheet|sheet-json`.
+4. Skill and Artist Guide: animation workflow from 4.5; new review category **Motion** (loop transition last → first frame, timing, anchor stability on the pivot, silhouette per frame, no unintended pixel flicker). Research sources for animation rules during implementation and link them as in the existing guide. Remove the sentence “Animation … later extensions”.
+5. Briefly extend `docs/mcp.md` and add a README bullet point (per AGENTS.md).
 
-**Tests (`tests/server.test.ts`, `tests/images.test.ts`):** MCP-Durchlauf 4-Frame-Asset anlegen → `duplicate_frame` + `stamp` → `inspect_asset` liefert genau ein Bild mit erwarteter Breite (`n·w·scale` plus Trennlinien); Onion färbt nur Nachbarframes; `finish_run('completed')` ohne Abdeckung aller Frames abgelehnt; Sheet-PNG pixelgenau gleich den Einzelframes; JSON-Rechtecke, Dauern und Tags korrekt; Unity-Rechtecke mit gespiegelter y-Achse.
+**Tests (`tests/server.test.ts`, `tests/images.test.ts`):** MCP run-through: create a 4-frame asset → `duplicate_frame` + `stamp` → `inspect_asset` returns exactly one image with the expected width (`n·w·scale` plus gutter lines); onion skin tints only neighboring frames; `finish_run('completed')` rejected without coverage of all frames; sheet PNG pixel-identical to the individual frames; JSON rectangles, durations and tags correct; Unity rectangles with a flipped y-axis.
 
-**Reale Abnahme** (in [testing.md](testing.md) aufnehmen, Ergebnis in [verification.md](verification.md)): 32×32-Skelett mit 4-Frame-Idle und 6-Frame-Walk, Tags `idle`/`walk`; Füße bleiben am Pivot; Sheet und JSON in einer Engine importieren. Mit Codex und Claude getrennt prüfen; Batch-Verbrauch gegen das Run-Budget festhalten.
+**Real-world acceptance** (add to [testing.md](testing.md), result in [verification.md](verification.md)): 32×32 skeleton with a 4-frame idle and a 6-frame walk, tags `idle`/`walk`; feet stay on the pivot; import the sheet and JSON into an engine. Test separately with Codex and Claude; record batch usage against the run budget.
 
-### Phase 3 – Timeline im Editor (L)
+### Phase 3 – Timeline in the editor (L)
 
-Dateien und Verhalten wie in 4.6. **Tests:** `tests/animation-helpers.test.ts` (Zyklus, Ping-Pong, einmalig, rückwärts, nur Tag, Onion-Auswahl an Rändern), Kürzel in `tests/view-helpers.test.ts`, Vorschau in `tests/asset-preview.test.ts`. **Browserabnahme:** Frames anlegen/duplizieren/verschieben/löschen inkl. Undo/Redo, Zeichnen trifft nur den aktuellen Frame, Onion verändert keine Daten, Wiedergabe mit echten Dauern, externe Agentenänderung an einem anderen Frame erscheint live.
+Files and behavior as in 4.6. **Tests:** `tests/animation-helpers.test.ts` (cycle, ping-pong, once, reverse, tag only, onion frame selection at the edges), shortcuts in `tests/view-helpers.test.ts`, preview in `tests/asset-preview.test.ts`. **Browser acceptance:** create/duplicate/move/delete frames incl. undo/redo, drawing affects only the current frame, onion skin changes no data, playback with real durations, an external agent change to another frame appears live.
 
-### Phase 4 – Erweiterungen (je S–M, nach Bedarf)
+### Phase 4 – Extensions (S–M each, as needed)
 
-- GIF-Export (Indexpalette ≤ 32 Farben und binäre Transparenz passen direkt zu GIF): kleine Abhängigkeit wie `gifenc` oder eigener LZW-Encoder; Entscheidung bei Umsetzung.
-- Sprite-Sheet-PNG-Import mit Zellgröße → Frames.
-- Verlinkte Cels für statische Ebenen (Pixelorama `link_set`, `new_cels_linked`): einmal bearbeiten, in allen verlinkten Frames wirksam; spart Speicher.
-- Speicher-Kompaktierung der Cels (z. B. Base64/RLE nur in SQLite, API unverändert), falls die Messung aus Phase 1 es verlangt.
-- Godot-`SpriteFrames`-Export; `stamp` aus einem anderen Asset gleicher Palette für Asset-Familien.
+- GIF export (an index palette ≤ 32 colors and binary transparency fit GIF directly): a small dependency such as `gifenc` or a custom LZW encoder; decide during implementation.
+- Sprite sheet PNG import with cell size → frames.
+- Linked cels for static layers (Pixelorama `link_set`, `new_cels_linked`): edit once, takes effect in all linked frames; saves storage.
+- Storage compaction of the cels (e.g. Base64/RLE only in SQLite, API unchanged), if the measurement from Phase 1 calls for it.
+- Godot `SpriteFrames` export; `stamp` from another asset with the same palette for asset families.
 
-## 6. Risiken und Gegenmaßnahmen
+## 6. Risks and mitigations
 
-| Risiko | Gegenmaßnahme |
+| Risk | Mitigation |
 | --- | --- |
-| Revisionen speichern das Volldokument; Frames vervielfachen die Größe. | Phase-1-Messung; Frame-Limit 64; Kompaktierung oder verlinkte Cels in Phase 4. |
-| Formänderung des Dokuments bricht REST-/MCP-Clients. | `schemaVersion`, Anheben beim Lesen, Import beider Versionen, Skill-Update in derselben Phase. |
-| Große Testumstellung verdeckt Verhaltensfehler. | Umstellung als eigener Commit ohne Verhaltensänderung, danach erst neue Funktionen. |
-| `App.tsx` wird unübersichtlich. | Timeline und Wiedergabelogik in eigene Dateien, App nur Verdrahtung. |
-| Run-Budget (120 Batches) reicht für viele Frames nicht. | In der realen Abnahme messen; erst dann ggf. Budget an Frame-Anzahl koppeln. |
-| Kompakte Antwort als Standard überrascht bestehende Agenten. | `response: 'full'`; Skill nennt den Wechsel; `get_asset` liefert alles Weitere. |
+| Revisions store the full document; frames multiply the size. | Phase 1 measurement; frame limit 64; compaction or linked cels in Phase 4. |
+| Changing the document's shape breaks REST/MCP clients. | `schemaVersion`, upgrade on read, import of both versions, skill update in the same phase. |
+| A large test conversion hides behavior bugs. | Conversion as a separate commit without behavior changes, new features only afterwards. |
+| `App.tsx` becomes cluttered. | Timeline and playback logic in separate files, App only wiring. |
+| The run budget (120 batches) is not enough for many frames. | Measure in the real-world acceptance test; only then tie the budget to the frame count if needed. |
+| A compact response by default surprises existing agents. | `response: 'full'`; the skill mentions the switch; `get_asset` provides everything else. |
 
-## 7. Offene Entscheidungen (mit Empfehlung)
+## 7. Open decisions (with recommendation)
 
-1. **Timing:** `durationMs` pro Frame *(empfohlen)* oder FPS × Multiplikator wie Pixelorama.
-2. **Tags:** indexbasiert wie Pixelorama/Aseprite *(empfohlen)* oder an Frame-IDs gebunden.
-3. **`apply_operations`-Antwort:** kompakt als Standard *(empfohlen)* oder nur auf Wunsch.
-4. **GIF:** kleine Abhängigkeit *(empfohlen, weniger Code)* oder eigener Encoder.
-5. **Frame-Limit:** 64 *(empfohlen für V1)*.
+1. **Timing:** `durationMs` per frame *(recommended)* or FPS × multiplier like Pixelorama.
+2. **Tags:** index-based like Pixelorama/Aseprite *(recommended)* or bound to frame IDs.
+3. **`apply_operations` response:** compact by default *(recommended)* or only on request.
+4. **GIF:** small dependency *(recommended, less code)* or custom encoder.
+5. **Frame limit:** 64 *(recommended for V1)*.
 
-Pixeloramas MIT-Lizenz bleibt als Herkunft der untersuchten Konzepte dokumentiert; es wird kein Pixelorama-Code, Shader oder Asset kopiert.
+Pixelorama's MIT license remains documented as the origin of the examined concepts; no Pixelorama code, shaders or assets are copied.
 
-## 8. Umsetzungsstand
+## 8. Implementation status
 
-Phasen 0 bis 3 sind vollständig umgesetzt, aus Phase 4 GIF-Export, Sprite-Sheet-Import und eine Speicher-Kompaktierung.
+Phases 0 to 3 are fully implemented, and from Phase 4 GIF export, sprite sheet import and a storage compaction.
 
-**Entscheidungen zu Abschnitt 7:** Dauer in ms pro Frame; indexbasierte Tags mit Pixeloramas Einfüge-/Löschregeln; kompakte `apply_operations`-Antwort als Standard; Frame-Limit 64. Beim GIF fiel die Wahl abweichend von der Empfehlung auf einen eigenen GIF89a-Encoder (rund 60 Zeilen): Indexpaletten mit höchstens 33 Einträgen und binärer Transparenz passen direkt zu GIF, eine Abhängigkeit entfällt, und ein unabhängiger Decoder (Pillow) bestätigt das Ergebnis.
+**Decisions on section 7:** duration in ms per frame; index-based tags with Pixelorama's insert/delete rules; compact `apply_operations` response by default; frame limit 64. For GIF, contrary to the recommendation, a custom GIF89a encoder was chosen (about 60 lines): index palettes with at most 33 entries and binary transparency fit GIF directly, a dependency is avoided, and an independent decoder (Pillow) confirms the result.
 
-**Abweichungen und Ergänzungen gegenüber dem Plan:**
+**Deviations from and additions to the plan:**
 
-- `create_asset` nimmt Animations-Tags als `animationTags`, weil `tags` dort bereits die Suchbegriffe des Assets sind.
-- Unity-Metadaten sind in `unityManifest` (Einzelbild) und `unitySheetManifest` (Sheet mit Sprites und Clips) getrennt.
-- `inspect_asset` legt Sheets standardmäßig mit höchstens 8 Spalten an, damit das Prüfbild für Vision-Modelle kompakt bleibt; der Export nutzt einen horizontalen Streifen.
-- `stamp` liest andere Ebenen und Frames ohne Schreib-Scope, wie die Gesamtbild-Referenz beim Füllen. Frame-Struktur ignoriert Ebenensperren wie Pixelorama: Sperren schützen das Zeichnen in vorhandenen Frames.
-- Speicher: Die Messung zeigte, dass jede Replay-Antwort das Volldokument doppelt speicherte. Replay-Einträge enthalten nun nur Revisions-ID und Diff; das halbiert den Speicher pro Revision. Cel-Kompaktierung und verlinkte Cels sind bei rund 70 KB pro Revision (8 Frames × 4 Ebenen × 32×32) nicht nötig.
-- Sprite-Sheet-Import: REST-Parameter `frameWidth`/`frameHeight` für beliebige Raster; der Editor erkennt Streifen quadratischer Zellen und fragt nach.
-- Die Server-Tests geben dem Mock-Socket von light-my-request das `destroySoon` echter Sockets; ohne das stürzten längere MCP-Tests über einen Drain-Timer des MCP-Transports ab (vorbestehend, im Betrieb ohne Wirkung).
+- `create_asset` takes animation tags as `animationTags`, because `tags` there are already the asset's search terms.
+- Unity metadata is split into `unityManifest` (single image) and `unitySheetManifest` (sheet with sprites and clips).
+- By default, `inspect_asset` lays out sheets with at most 8 columns so that the inspection image stays compact for vision models; the export uses a horizontal strip.
+- `stamp` reads other layers and frames without a write scope, like the whole-image reference when filling. Frame structure ignores layer locks like Pixelorama: locks protect against drawing in existing frames.
+- Storage: The measurement showed that every replay response stored the full document a second time. Replay entries now contain only the revision ID and diff; this halves the storage per revision. Cel compaction and linked cels are not needed at about 70 KB per revision (8 frames × 4 layers × 32×32).
+- Sprite sheet import: REST parameters `frameWidth`/`frameHeight` for arbitrary grids; the editor detects strips of square cells and asks the user.
+- The server tests give light-my-request's mock socket the `destroySoon` of real sockets; without it, longer MCP tests crashed via a drain timer of the MCP transport (pre-existing, no effect in normal operation).
 
-**Offen:** verlinkte Cels, Godot-`SpriteFrames`-Export, `stamp` aus anderen Assets, reale Agenten-Abnahme der Animationsaufgaben 21–23 und der Import der Exporte in einer echten Engine.
+**Open:** linked cels, Godot `SpriteFrames` export, `stamp` from other assets, real agent acceptance testing of animation tasks 21–23 and the import of the exports into a real engine.

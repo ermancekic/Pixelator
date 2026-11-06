@@ -1,44 +1,44 @@
 # Tiles
 
-Ein **Tileset** ist ein Asset mit Kachelraster. Die Leinwand ist ein Vielfaches der Kachelgröße; Kachel-IDs zählen zeilenweise ab 0. Frames animieren alle Kacheln gemeinsam.
+A **tileset** is an asset with a tile grid. The canvas is a multiple of the tile size; tile IDs count row by row from 0. Frames animate all tiles together.
 
-## Anlegen und bearbeiten
+## Creating and editing
 
-- **Neues Asset → Tileset:** Kachelgröße (8–32 px) sowie Spalten × Zeilen. 8 × 6 Kacheln reichen für ein Blob-Autotile. Bestehende Assets erhalten im Bereich *Kacheln* ein Raster.
-- **Kachel wählen** (`T`): wählt die Kachel unter dem Zeiger und begrenzt das Zeichnen auf sie. Im Bereich *Kacheln* lassen sich Name, Klasse, Häufigkeit, Kollision (keine, voll, Hälften oder eigenes Rechteck) und Terrain festlegen. Die Statusleiste zeigt die Kachel-ID unter dem Zeiger.
-- **Terrain-Widget:** Die 3 × 3 Felder sind die acht Nachbarpositionen plus die Mitte. Ein Klick schaltet zum nächsten Terrain, ein Rechtsklick zum vorherigen. Der Modus bestimmt die nutzbaren Felder: *Blob* liest Ecken und Kanten, *Kanten* nur die Seiten, *Ecken* nur die Ecken.
-- **Nahtlos zeichnen** (Werkzeugleiste): Stift, Radierer, Schattieren, Linie, Formen und Polygon laufen über den Rand auf der Gegenseite weiter. Die Umgebung zeigt die Wiederholung. **⇲ ½** versetzt die Auswahl, die gewählte Kachel oder die Leinwand um die halbe Größe mit Umlauf, sodass Nähte in die Mitte rücken.
-- **Leinwandgröße:** Mit Kachelraster bewegen Größe, Ausrichtung und Zuschnitt ganze Kacheln; die Metadaten wandern mit.
+- **New asset → Tileset:** tile size (8–32 px) plus columns × rows. 8 × 6 tiles are enough for a blob autotile. Existing assets get a grid in the *Tiles* section.
+- **Select tile** (`T`): selects the tile under the pointer and limits drawing to it. In the *Tiles* section you can set name, class, probability, collision (none, solid, halves or custom rectangle) and terrain. The status bar shows the tile ID under the pointer.
+- **Terrain widget:** The 3 × 3 cells are the eight neighbor positions plus the center. A click switches to the next terrain, a right-click to the previous one. The mode determines the usable cells: *Blob* reads corners and edges, *Edges* only the sides, *Corners* only the corners.
+- **Seamless drawing** (toolbar): pencil, eraser, shade, line, shapes and polygon continue across the edge on the opposite side. The surroundings show the repetition. **⇲ ½** offsets the selection, the selected tile or the canvas by half its size with wraparound, so seams move to the center.
+- **Canvas size:** With a tile grid, size, anchoring and cropping move whole tiles; the metadata moves with them.
 
 ## Autotiles
 
-1. Unter *Autotile-Vorlage* Vorlage und Startkachel wählen. Die Schlüsselkacheln erscheinen markiert auf der Leinwand.
-2. Die Schlüsselkacheln zeichnen: **Einzeln** (freistehend), **Waagerecht** (links und rechts verbunden), **Senkrecht** (oben und unten verbunden), **Kreuzung** (alle vier Seiten mit Innenecken) und **Fläche**. Die Kanten-Vorlage braucht nur die ersten vier.
-3. **Vorlage vervollständigen:** Jedes Viertel der übrigen Kacheln wird aus dem passenden Viertel einer Schlüsselkachel kopiert, wie bei RPG-Maker-Autotiles. Alle Kacheln erhalten Terrain-Labels. Bei Bedarf wächst die Leinwand.
+1. Under *Autotile template*, choose the template and start tile. The key tiles appear marked on the canvas.
+2. Draw the key tiles: **Single** (freestanding), **Horizontal** (connected left and right), **Vertical** (connected top and bottom), **Cross** (all four sides with inner corners) and **Fill**. The Edges template only needs the first four.
+3. **Complete template:** Each quarter of the remaining tiles is copied from the matching quarter of a key tile, as with RPG Maker autotiles. All tiles get terrain labels. The canvas grows if needed.
 
-| Vorlage | Terrain-Modus | Kacheln | Einsatz |
+| Template | Terrain mode | Tiles | Use |
 | --- | --- | --- | --- |
-| Blob | Ecken und Kanten | 47 | Wände, Inseln, Plattformen mit Innenecken |
-| Kanten | Kanten | 16 | Wege, Zäune, Rohre |
-| Ecken | Ecken | 5 Schlüssel + 15 | Übergänge Gras/Erde, Wasserufer |
+| Blob | Corners and edges | 47 | Walls, islands, platforms with inner corners |
+| Edges | Edges | 16 | Paths, fences, pipes |
+| Corners | Corners | 5 keys + 15 | Grass/dirt transitions, shorelines |
 
-Nach Korrekturen an den Schlüsselkacheln die Vorlage erneut vervollständigen. Eine gerade Kachelgröße ist Voraussetzung.
+After corrections to the key tiles, complete the template again. An even tile size is required.
 
-## Testkarte
+## Test map
 
-Die Testkarte malt eine Beispielform mit den gelabelten Kacheln, wie ein Terrain-Pinsel in Tiled oder Godot. Ein Klick schaltet eine Zelle um (bei Ecken-Sets eine Ecke), `Alt`+Klick wählt die verwendete Kachel. Magenta markiert Kombinationen ohne Kachel; die Kopfzeile zählt alle fehlenden Kombinationen des Modus. Agenten sehen dieselbe Karte über `inspect_asset` mit `preview: "terrain"`.
+The test map paints a sample shape with the labeled tiles, like a terrain brush in Tiled or Godot. A click toggles a cell (a corner for corner sets), `Alt`+click selects the tile used. Magenta marks combinations without a tile; the header counts all missing combinations for the mode. Agents see the same map via `inspect_asset` with `preview: "terrain"`.
 
 ## Export
 
-| Format | Inhalt |
+| Format | Contents |
 | --- | --- |
-| Tileset-PNG | Alle Kacheln am Rasterplatz. Animierte Kacheln liegen als weitere Zeilenblöcke darunter (ID + Frame × Kacheln pro Frame). |
-| Tiled `.tsx` / `.tsj` | Kachelgröße, Rand und Abstand, Klasse, Name als Eigenschaft, Kollision als Objektgruppe, Animationen, Terrain als Wang-Set (`corner`, `edge`, `mixed`). |
-| Godot `.tres` | TileSet mit Atlas, Terrain-Set (Modus 0/1/2) und Peering-Bits, Physik-Polygonen, Custom Data (`name`, `type`), Wahrscheinlichkeit und Animationen. |
-| Unity | Import-Manifest: ein Sprite pro Kachel bei einer Einheit pro Kachel, animierte Kacheln, Namen und Kollision. |
+| Tileset PNG | All tiles at their grid position. Animated tiles sit below as additional row blocks (ID + frame × tiles per frame). |
+| Tiled `.tsx` / `.tsj` | Tile size, margin and spacing, class, name as a property, collision as an object group, animations, terrain as a Wang set (`corner`, `edge`, `mixed`). |
+| Godot `.tres` | TileSet with atlas, terrain set (mode 0/1/2) and peering bits, physics polygons, custom data (`name`, `type`), probability and animations. |
+| Unity | Import manifest: one sprite per tile at one unit per tile, animated tiles, names and collision. |
 
-Exportiert wird über „Tileset exportieren …“ im Kachelbereich oder `Strg+S`: Das Exportfenster zeigt das Tileset-Bild und die Beschreibungsdateien vorab, mit wählbaren Zielen, Extrude und Abstand.
+Export via “Export tileset …” in the Tiles section or `Ctrl+S`: the export window previews the tileset image and the description files, with selectable targets, extrude and spacing.
 
-**Kanten wiederholen** (Extrude) kopiert die Randpixel jeder Kachel nach außen und verhindert Farbsäume beim Filtern in Engines. Bild und Beschreibung gehören in denselben Ordner, weil die Beschreibung das Bild per Dateinamen referenziert; Godot löst den relativen Pfad neben der `.tres` auf. Die Einzelkachel des Blob-Sets hat in Tiled keine Wang-ID, da Tiled kein Zentrum speichert; Godot nutzt sie über das Zentrums-Terrain.
+**Extrude edges** (extrude) copies the edge pixels of each tile outward and prevents color fringes when engines filter the image. Image and description belong in the same folder because the description references the image by file name; Godot resolves the relative path next to the `.tres`. The single tile of the blob set has no Wang ID in Tiled because Tiled does not store a center; Godot uses it via the center terrain.
 
-Pixelator erstellt Tilesets, aber keine Level-Karten. Das Leveldesign bleibt in Tiled, LDtk oder der Engine. Hintergrund und Quellen: [Recherchebericht](<../reports/Tiles für Pixelator.md>).
+Pixelator creates tilesets, but not level maps. Level design stays in Tiled, LDtk or the engine. Background and sources: [research report](<../reports/Tiles for Pixelator.md>).

@@ -1,135 +1,135 @@
-# Geprüfter Stand · 17. Oktober 2026
+# Verified state · 17 October 2026
 
-Die erste Version ist lokal implementiert und läuft mit einer gemeinsamen Raster-Engine für Browser und MCP. Diese Prüfung betrifft den Stand vom 17. Oktober 2026, keine allgemeine Garantie für jedes Motiv oder Agentenmodell.
+The first version is implemented locally and runs on a shared raster engine for the browser and MCP. This verification covers the state as of 17 October 2026; it is not a general guarantee for every subject or agent model.
 
-## Ergänzung: Exportfenster, Menüleiste und Sprache
+## Addendum: Export window, menu bar and language
 
-Am 17. Oktober 2026 bestanden **229 Tests in 16 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Jeder Oberflächentext aus `t()`/`msg()` hat eine englische Übersetzung mit denselben Platzhaltern, ohne verwaiste Einträge; statische und dynamische Servermeldungen werden für die deutsche Oberfläche übersetzt; Einstellungen aus dem Browser-Speicher werden geprüft; Einpassen-Zoom und die Kürzel `Strg+,`, `Strg+B`, `Strg+J`. Servermeldungen sind jetzt englisch, auch für MCP-Clients.
+On 17 October 2026, **229 tests in 16 files**, the TypeScript check and the production build passed. Newly tested: every interface text from `t()`/`msg()` has an English translation with the same placeholders, with no orphaned entries; static and dynamic server messages are translated for the German interface; settings from browser storage are validated; fit zoom and the shortcuts `Ctrl+,`, `Ctrl+B`, `Ctrl+J`. Server messages are now English, including for MCP clients.
 
-**Browser** (Chromium über Playwright, eigener Datenordner) mit 21 Prüfungen, mehrfach in Folge bestanden:
-- Englische Menüleiste und `lang="en"` beim ersten Start; Menüs per Maus und Tastatur.
-- Kein deutscher Text in der englischen Oberfläche: Editor, alle Werkzeuge, Menüs, Exportformate, Kachelbereich und alle Dialoge.
-- Animationsleiste, Eigenschaften und Bibliothek aus- und einblenden (Menü, `Strg+J`, `Strg+B`), auch nach Neuladen; „Fensteraufteilung zurücksetzen“ stellt eine verbreiterte Bibliothek wieder her, die Zeichenfläche bleibt gezeichnet.
-- Export: PNG mit Größe und Frame; Download mit Dateinamen schließt das Fenster; Einstellungen bleiben erhalten; Sheet-Vorschau und Tileset-Vorschau (Extrude 1, Abstand 2) pixelgleich zur Datei; `.tsx`-Vorschau gleich dem Download; Sheet mit JSON lädt beide Dateien; unpassende Formate gesperrt.
-- Die Vorschau passt ein 512×384-Bild bei 29 % ein; 1× zeigt 512 px.
-- Umschalten auf Deutsch übersetzt Menüs, den Verlaufseintrag „Asset angelegt“ und die Servermeldung „Eine gültige PNG-Datei ist erforderlich.“ und bleibt nach Neuladen.
-- Keine Seiten- oder Konsolenfehler.
+**Browser** (Chromium via Playwright, separate data folder) with 21 checks, passed several times in a row:
+- English menu bar and `lang="en"` on first launch; menus via mouse and keyboard.
+- No German text in the English interface: editor, all tools, menus, export formats, the Tiles section and all dialogs.
+- Hiding and showing the timeline, properties and library (menu, `Ctrl+J`, `Ctrl+B`), also after reload; “Reset panel layout” restores a widened library, and the canvas stays rendered.
+- Export: PNG with size and frame; download with a file name closes the window; settings are kept; sheet preview and tileset preview (extrude 1, spacing 2) pixel-identical to the file; `.tsx` preview identical to the download; sheet with JSON downloads both files; unsuitable formats disabled.
+- The preview fits a 512×384 image at 29%; 1× shows 512 px.
+- Switching to German translates the menus, the history entry “Asset created” and the server message “A valid PNG file is required.”, and persists after reload.
+- No page or console errors.
 
-Die bisherigen Browserläufe (Editor-Grundfunktionen 22, Tiles 13, Projektübersicht 14 Prüfungen) bestehen weiterhin, jetzt in der deutschen Oberfläche und mit Export über das Fenster. Bei 1024, 820 und 390 px Breite gibt es kein horizontales Scrollen; unter 900 px ist die Menüleiste ausgeblendet.
+The earlier browser runs (editor basics 22, tiles 13, project overview 14 checks) still pass, now in the German interface and with export through the window. At 1024, 820 and 390 px width there is no horizontal scrolling; below 900 px the menu bar is hidden.
 
-**README-Banner:** Kopfbanner mit englischem Text, als GIF animiert (Glanz über dem Logo, blinkender Cursor, funkelnde Sterne); Fußbanner animiert (Wasser, schwebende Münzen, Portal, Funken, Sterne, blinzelnder Schleim). Beide GIFs übernehmen die Farben der Vorlagen verlustfrei.
+**README banners:** header banner with English text, animated as a GIF (shine across the logo, blinking cursor, twinkling stars); footer banner animated (water, floating coins, portal, sparks, stars, blinking slime). Both GIFs carry over the colors of the source images losslessly.
 
-**Nicht geprüft:** Firefox und Safari, insbesondere mehrere Downloads aus einem Klick; Screenreader-Ausgabe der Menüs. Meldungen der Raster-Engine bleiben in der deutschen Oberfläche englisch.
+**Not verified:** Firefox and Safari, especially multiple downloads from one click; screen reader output of the menus. Raster engine messages stay English in the German interface.
 
-## Ergänzung: Projektübersicht
+## Addendum: Project overview
 
-Die Projektauswahl ist ein Fenster mit Projektkarten statt einer Auswahlliste. Ein Servertest prüft die Übersicht (Assetzahl, letzte Änderung, Reihenfolge und Revision der Vorschau-Assets, leeres Projekt).
+Project selection is a window with project cards instead of a dropdown list. A server test checks the overview (asset count, last change, order and revision of the preview assets, empty project).
 
-**Browser** (Chromium, eigener Datenordner, vier Projekte mit gezeichneten Assets) mit 14 Prüfungen:
-- Sortierung nach Aktivität, vier Vorschaubilder, Markierung „Geöffnet“ sowie Stil, Assetzahl und Änderungszeit.
-- Suche mit `Enter`, Wechsel per Pfeiltasten und `Enter`, Hinweis bei leerem Ergebnis, `Esc`.
-- „Neues Projekt“ aus dem Fenster und die Darstellung ohne Assets.
-- Mobile Breite ohne horizontales Scrollen.
-- Keine Seiten- oder Konsolenfehler.
+**Browser** (Chromium, separate data folder, four projects with drawn assets) with 14 checks:
+- Sorting by activity, four preview images, the “Open” badge, plus style, asset count and modification time.
+- Search with `Enter`, switching with the arrow keys and `Enter`, a hint for an empty result, `Esc`.
+- “New project” from the window and the display without assets.
+- Mobile width without horizontal scrolling.
+- No page or console errors.
 
-## Ergänzung: Tiles
+## Addendum: Tiles
 
-Am 17. Oktober 2026 bestanden **218 Tests in 15 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu getestet: Kachelraster und Metadaten-Validierung, `tileset`/`tile_properties`/`remove_tileset`, Remap bei `resize_canvas`, `shift`, Autotile-Komposition (47/16/15 Kombinationen, Viertel- und Halbversatz-Regeln), Terrain-Zuordnung mit Wahrscheinlichkeit, Testkarten-Render, Tileset-Layout mit Extrude, Tiled-/Godot-/Unity-Export, REST- und MCP-Durchlauf sowie nahtloses Zeichnen.
+On 17 October 2026, **218 tests in 15 files**, the TypeScript check and the production build passed. Newly tested: tile grid and metadata validation, `tileset`/`tile_properties`/`remove_tileset`, remapping on `resize_canvas`, `shift`, autotile composition (47/16/15 combinations, quarter and half-offset rules), terrain matching with probability, test map rendering, tileset layout with extrude, Tiled/Godot/Unity export, a REST and MCP run, and seamless drawing.
 
-**Externe Werkzeuge:** Ein mit der Engine erzeugtes 16×16-Blob-Tileset (Autotile aus fünf Schlüsselkacheln, Name, Klasse, Kollision, Häufigkeit, zwei Frames, Extrude 1) wurde exportiert und mit den Originalwerkzeugen geprüft.
-- **Godot 4.3** (headless, offizielles Linux-Release) lädt die `.tres` mit 47 Kacheln, Terrain-Set „Gras“ im Modus 0, Kollisionspolygon um die Kachelmitte, Custom Data, Häufigkeit 0,5 und Animation; Frame 2 liegt korrekt bei Pixel (73, 109).
-- Godots eigener Terrain-Pinsel (`set_cells_terrain_connect`) wählte für eine Testform in **48 von 48 Zellen dieselbe Kachel** wie Pixelators Testkarte.
-- **pytiled-parser 2.2.9** las TSX und TSJ identisch: 96 Kacheln (2 Frames), Rand 1, Abstand 2, Animation 4→52, Kollisionsobjekt und ein Wang-Set mit 46 Kacheln. Die Einzelkachel bleibt ohne Wang-ID, weil Tiled kein Zentrum speichert.
+**External tools:** A 16×16 blob tileset generated with the engine (autotile from five key tiles, name, class, collision, probability, two frames, extrude 1) was exported and checked with the original tools.
+- **Godot 4.3** (headless, official Linux release) loads the `.tres` with 47 tiles, terrain set “Gras” in mode 0, collision polygon around the tile center, custom data, probability 0.5 and animation; frame 2 sits correctly at pixel (73, 109).
+- For a test shape, Godot's own terrain brush (`set_cells_terrain_connect`) chose **the same tile in 48 of 48 cells** as Pixelator's test map.
+- **pytiled-parser 2.2.9** read TSX and TSJ identically: 96 tiles (2 frames), margin 1, spacing 2, animation 4→52, collision object and a Wang set with 46 tiles. The single tile has no Wang ID because Tiled does not store a center.
 
-**Browser** (Chromium über Playwright, eigener Datenordner): Tileset im Dialog anlegen; Schlüsselkacheln markiert; „Vorlage vervollständigen“ ergibt 47 gelabelte Kacheln und eine vollständige Testkarte; Kachel-Werkzeug, Name, Klasse und Kollision speichern; Terrain-Widget erzeugt „1 von 47 Kombinationen fehlen“; acht Geisterkacheln und ein Strich über den rechten Rand, der links weiterläuft; Versatz ½ nur innerhalb der gewählten Kachel; Tiled- und Godot-Download mit Extrude; Leinwand um eine Kachelspalte erweitert, Metadaten folgen. Keine Seiten- oder Konsolenfehler.
+**Browser** (Chromium via Playwright, separate data folder): creating a tileset in the dialog; key tiles marked; “Complete template” yields 47 labeled tiles and a complete test map; tile tool and saving name, class and collision; the terrain widget produces “1 of 47 combinations missing”; eight ghost tiles and a stroke across the right edge that continues on the left; ½ offset only within the selected tile; Tiled and Godot download with extrude; canvas extended by one tile column, metadata follows. No page or console errors.
 
-**Nicht geprüft:** Import in Tiled selbst (nur über den Parser), Unity-Import des Manifests und ein realer Agentenauftrag für ein Tileset.
+**Not verified:** import into Tiled itself (only via the parser), Unity import of the manifest and a real agent task for a tileset.
 
-## Ergänzung: Editor-Grundfunktionen
+## Addendum: Editor basics
 
-Am 17. Oktober 2026 bestanden **197 Tests in 13 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neue Tests decken Auswahlmasken im Engine-Scope, Kontur-, Polygon- und Palettenoptionen, `merge_layers`, `resize_canvas` (einschließlich Assetgröße, Wiederherstellen und MCP), skalierte PNG-/Sheet-Exporte, Palettendateien sowie die Editor-Helfer für Auswahl, Zwischenablage, Pinsel, Muster und Schattieren ab.
+On 17 October 2026, **197 tests in 13 files**, the TypeScript check and the production build passed. New tests cover selection masks in the engine scope, outline, polygon and palette options, `merge_layers`, `resize_canvas` (including asset size, restore and MCP), scaled PNG/sheet exports, palette files and the editor helpers for selection, clipboard, brush, patterns and shading.
 
-**Browser** (Chromium über Playwright, separater Dienst mit eigenem Datenordner): Pinsel 3 px malt 3×3, runder Radierer löscht ein Plus; gefülltes Rechteck mit Schachbrettmuster; Polygon per Enter; Zauberstab plus `Entf`; Lasso begrenzt den Fülleimer; Freiform verschieben; `Strg+A`, `Strg+C`, `Strg+Umschalt+V` als pixelgleiche neue Ebene; Zusammenführen; Schattieren; Zweitfarbe per Rechtsklick und `X`; Kontur; Farbe ersetzen; Leinwand auf 20×16 und „Auf Inhalt zuschneiden“; PNG-Export 4×; GPL-Export; HEX-Import mit „Pixel zuordnen“; Referenzbild; ein fremdes PNG aus der System-Zwischenablage (zwei neue Farben angehängt, mittig platziert, bei voller Palette angenähert). Keine Seiten- oder Konsolenfehler.
+**Browser** (Chromium via Playwright, separate service with its own data folder): a 3 px brush paints 3×3, a round eraser clears a plus; filled rectangle with checkerboard pattern; polygon via Enter; magic wand plus `Del`; lasso limits the fill bucket; moving a freeform selection; `Ctrl+A`, `Ctrl+C`, `Ctrl+Shift+V` as a pixel-identical new layer; merging; shading; secondary color via right-click and `X`; outline; replace color; canvas to 20×16 and “Crop to content”; PNG export 4×; GPL export; HEX import with “Map pixels”; reference image; an external PNG from the system clipboard (two new colors appended, centered, approximated when the palette is full). No page or console errors.
 
-**Nicht geprüft:** Zwischenablage in Firefox und Safari, Import des skalierten Sheet-JSON in einer Engine und ein realer Agentenauftrag mit den neuen Operationen.
+**Not verified:** clipboard in Firefox and Safari, import of the scaled sheet JSON into an engine and a real agent task with the new operations.
 
-## Ergänzung: KI-Effizienz und Animation
+## Addendum: AI efficiency and animation
 
-Umgesetzt nach dem [Implementierungsplan](animation-plan.md). Am 17. Oktober 2026 bestanden **164 Tests in 10 Dateien**, TypeScript-Prüfung und Produktionsbuild. Neu geprüft sind unter anderem: `rows`/`read_pixels` verlustfrei, Frames mit Scope-Nachweis, Pixelorama-Tag-Regeln, alte Dokumente/Replays/Bundles als ein Frame, Sheet-Inspektion mit Onion und Frame-Abdeckung für `completed`, Sheet-/Aseprite-/Unity-/GIF-Export sowie Sheet-Re-Import.
+Implemented according to the [implementation plan](animation-plan.md). On 17 October 2026, **164 tests in 10 files**, the TypeScript check and the production build passed. Newly verified, among others: lossless `rows`/`read_pixels`, frames with scope proof, Pixelorama tag rules, old documents/replays/bundles as a single frame, sheet inspection with onion and frame coverage for `completed`, sheet/Aseprite/Unity/GIF export and sheet re-import.
 
-**Messung über MCP** (In-Memory-Server, 32×32-Sprite, Zeichen inklusive Text- und `structuredContent`-Kopie):
+**Measurement via MCP** (in-memory server, 32×32 sprite, characters including the text and `structuredContent` copy):
 
-| Aufruf | vorher | nachher |
+| Call | before | after |
 | --- | ---: | ---: |
-| `apply_operations`-Antwort | 3 310 | 1 334 (kompakt), 3 920 mit `response: "full"` |
-| Ganze Ebene lesen | 7 590 (`get_asset` `includePixels`) | 3 394 (`read_pixels`) |
-| 8×8-Ausschnitt lesen | nicht möglich | 1 282 |
-| 32×32-Block schreiben | 2 232 (`patch`) | 1 171 (`rows`) |
-| `tools/list` (einmal je Sitzung) | 23 512 | 32 318 |
-| `get_workflow` (einmal je Auftrag) | 24 475 | 32 732 |
+| `apply_operations` response | 3,310 | 1,334 (compact), 3,920 with `response: "full"` |
+| Read whole layer | 7,590 (`get_asset` `includePixels`) | 3,394 (`read_pixels`) |
+| Read 8×8 region | not possible | 1,282 |
+| Write 32×32 block | 2,232 (`patch`) | 1,171 (`rows`) |
+| `tools/list` (once per session) | 23,512 | 32,318 |
+| `get_workflow` (once per task) | 24,475 | 32,732 |
 
-Die laufenden Kosten pro Batch sinken deutlich; der feste Kontext wächst durch Frame-Operationen und den Animationsteil des Skills. Token wurden nicht mit einem echten Tokenizer gemessen.
+The running cost per batch drops significantly; the fixed context grows due to frame operations and the animation part of the skill. Tokens were not measured with a real tokenizer.
 
-**Speicher:** Ein Asset mit 8 Frames × 4 Ebenen × 32×32 belegt rund 69 KB JSON pro Revision. Die Replay-Tabelle speicherte jede Antwort samt Dokument ein zweites Mal (rund 141 KB Datenbank pro Revision). Neue Replay-Einträge enthalten nur Revisions-ID und Diff (rund 73 KB pro Revision); alte Einträge bleiben lesbar. Eine weitere Kompaktierung der Cels oder verlinkte Cels sind bei dieser Größenordnung nicht nötig und bleiben offen.
+**Storage:** An asset with 8 frames × 4 layers × 32×32 takes about 69 KB of JSON per revision. The replay table stored every response including the document a second time (about 141 KB of database per revision). New replay entries contain only the revision ID and diff (about 73 KB per revision); old entries stay readable. Further compaction of the cels or linked cels are not needed at this scale and remain open.
 
-**GIF:** Der eigene GIF89a-Encoder wurde zusätzlich mit dem unabhängigen Decoder von Pillow 12.3 geprüft (zwei Frames, darunter 10 800 Zufallsindizes mit Tabellen-Reset): Indizes, Dauer, Transparenz und Loop stimmen.
+**GIF:** The custom GIF89a encoder was additionally checked with the independent decoder of Pillow 12.3 (two frames, including 10,800 random indices with a table reset): indices, duration, transparency and loop match.
 
-**Browser** (Chromium über Playwright, separater Dienst auf Port 4318 mit eigener Datenbank): Frame duplizieren, mit dem Stift nur in Frame 2 zeichnen (Frame 1 bytegleich), Dauer 250 ms setzen, Onion Skin per `Umschalt+O`, Tag `bounce` (Ping-Pong) im Dialog anlegen, Wiedergabe per `K` mit wechselnden Frames in der Vorschau und Stopp, Frame-Navigation mit `,`, Undo des Tags, externe Agentenänderung an Frame 2 mit Hinweis „Asset extern aktualisiert“, Frame löschen, PNG-Streifen als 3-Frame-Animation importieren und GIF-Link. Keine Seitenfehler; die Konsole meldete nur das fehlende `favicon.ico`.
+**Browser** (Chromium via Playwright, separate service on port 4318 with its own database): duplicating a frame, drawing with the pencil only in frame 2 (frame 1 byte-identical), setting the duration to 250 ms, onion skin via `Shift+O`, creating the tag `bounce` (ping-pong) in the dialog, playback via `K` with changing frames in the preview and stop, frame navigation with `,`, undo of the tag, an external agent change to frame 2 with the notice “Asset updated externally”, deleting a frame, importing a PNG strip as a 3-frame animation and GIF link. No page errors; the console only reported the missing `favicon.ico`.
 
-**Nicht geprüft:** Ein realer Codex- oder Claude-Animationsauftrag (Aufgaben 21–23 der [Abnahmematrix](testing.md)) und der Import von Aseprite-JSON und Unity-Metadaten in einer echten Engine. Die im Artist Guide verlinkten Animationsquellen (Saint11, Wikipedia) waren aus der Prüfumgebung wegen der Netzwerkrichtlinie nicht abrufbar; ihre Aussagen sind über Suchergebnisse belegt.
+**Not verified:** A real Codex or Claude animation task (tasks 21–23 of the [acceptance matrix](testing.md)) and the import of Aseprite JSON and Unity metadata into a real engine. The animation sources linked in the Artist Guide (Saint11, Wikipedia) could not be retrieved from the test environment because of the network policy; their claims are backed by search results.
 
-## Ergänzung: Pixelorama-Zeichenhilfen
+## Addendum: Pixelorama drawing aids
 
-Am 17. Oktober 2026 wurden **101 Tests in 7 Dateien** erfolgreich ausgeführt; TypeScript-Prüfung und Produktionsbuild bestehen. Neue Regressionstests decken Zeichensymmetrie, Pixel-Perfect, die Füllreferenz über sichtbare Ebenen, globale Farbflächen, Ebenenduplikate und deren REST-/MCP-/Projektimport-Verhalten ab.
+On 17 October 2026, **101 tests in 7 files** ran successfully; the TypeScript check and production build pass. New regression tests cover drawing symmetry, pixel-perfect, the fill reference across visible layers, global color areas, layer duplicates and their REST/MCP/project import behavior.
 
-Die Browserprüfung lief mit einer separaten In-Memory-Datenbank auf Port 4318. Das Füllen anhand zweier sichtbarer Konturen schrieb exakt **84 Pixel** auf die getrennte Farbebene; die **56 Konturpixel**, Außenbereich und innere Fläche blieben erhalten. Duplizieren erzeugte eine identische Ebene direkt über der Quelle; Rückgängig und Wiederholen funktionierten. Ein Stiftklick mit beiden Symmetrieachsen schrieb exakt vier Eckpixel auf das Duplikat und ließ die Quelle unverändert. Die gekachelte Vorschau enthielt neun Zellen; bei 4× wurden 16×16-Raster mit exakt 64×64 CSS-Pixeln angezeigt, mit hellem Hintergrund und Scrollbereich. Diese Stichprobe bewertet die Bedienung, keine künstlerische Qualität.
+The browser check ran with a separate in-memory database on port 4318. Filling based on two visible outlines wrote exactly **84 pixels** to the separate color layer; the **56 outline pixels**, the outside area and the inner area were preserved. Duplicating created an identical layer directly above the source; undo and redo worked. A pencil click with both symmetry axes wrote exactly four corner pixels to the duplicate and left the source unchanged. The tiled preview contained nine cells; at 4×, 16×16 rasters were shown at exactly 64×64 CSS pixels, with a light background and a scroll area. This spot check assesses usability, not artistic quality.
 
-Der normale Dienst auf Port 4317 wurde anschließend mit dem neuen Code gestartet. Alle **13 Projekte und 48 Assets** hatten nach dem Neustart identische Metadaten und Head-Revisions-IDs; die Testinstanz schrieb nicht in deren Datenbank.
+The regular service on port 4317 was then started with the new code. All **13 projects and 48 assets** had identical metadata and head revision IDs after the restart; the test instance did not write to their database.
 
-## Automatisierte Prüfungen der Erstabnahme
+## Automated checks from the initial acceptance
 
-`npm test`: **74 Tests bestanden** (Engine 24, PNG/Unity 13, Speicher 13, HTTP/MCP 15, stdio 1, Navigation/Hotkeys 8). `npm run build` einschließlich TypeScript-Prüfung besteht. Nach der Umstellung auf npm wurde eine saubere Installation mit `npm ci` aus der `package-lock.json` erfolgreich geprüft; die Versionen aller 17 direkten Abhängigkeiten bleiben unverändert. Die formale Skill-Validierung wurde bei der Erstabnahme geprüft.
+`npm test`: **74 tests passed** (engine 24, PNG/Unity 13, storage 13, HTTP/MCP 15, stdio 1, navigation/hotkeys 8). `npm run build` including the TypeScript check passes. After the switch to npm, a clean install with `npm ci` from the `package-lock.json` was verified successfully; the versions of all 17 direct dependencies remain unchanged. The formal skill validation was checked during the initial acceptance.
 
-Geprüft sind unter anderem atomarer Rollback einschließlich Run-Fortschritt, Idempotenz vor Revisionkonflikten, unveränderte geschützte Raster, transparente PNGs, Nearest-Neighbor, Projekt- und Historienimporte, Review-Zuordnung, Host/Origin-Prüfungen, große Projektimporte über 16 MB, ungültige JSON-RPC-Envelopes und das Beenden des Services bei offenem Editor.
+Among other things, the checks cover atomic rollback including run progress, idempotency before revision conflicts, unchanged protected rasters, transparent PNGs, nearest-neighbor, project and history imports, review assignment, host/origin checks, large project imports over 16 MB, invalid JSON-RPC envelopes and shutting down the service while the editor is open.
 
-## Echter Codex-Durchlauf
+## Real Codex run
 
-Codex CLI **0.163.0** war über Streamable HTTP mit dem laufenden Service verbunden. Die Anwendung hat keinen Agenten gestartet; die CLI wurde außerhalb der App zur Abnahme aufgerufen.
+Codex CLI **0.163.0** was connected to the running service via Streamable HTTP. The application did not start an agent; the CLI was invoked outside the app for the acceptance test.
 
-- Ein 32×32-Skelett wurde mit getrennten Körper-/Ausrüstungsebenen erstellt, als tatsächliches MCP-PNG inspiziert, korrigiert und exportiert. Der Run dauerte 79 Sekunden.
-- Beim anschließenden Präzisionsedit wurde das Schwert exakt drei Rasterpixel länger. Der unabhängige Vergleich fand **11 geänderte Pixel, null außerhalb des erlaubten Bereichs**. Alle übrigen Ebenen waren identisch. Das dekodierte PNG entspricht exakt dem Engine-Raster; der Unity-Pivot ist korrekt normalisiert.
-- Neun weitere echte Assets wurden erstellt: Goblin, Ritter, Schleim, Roboter, Boss-Skelett, Schwert, Trank, Schlüssel und Schild. Die Stichprobe umfasst 16–64 Pixel, vier Stilprofile sowie eine Referenzinspektion für Schwert/Schild.
-- Alle zehn Assets wurden unabhängig vom zeichnenden Client als Bilder betrachtet. Goblin, Schleim und Trank erhielten danach gezielte Nacharbeiten an Gesicht beziehungsweise Flaschenform. Die Paletten blieben erhalten; die anderen Goblin-Ebenen und der Schleimkörper blieben unverändert.
-- Die Ergebnisse sind erkennbare einfache Spielassets. Detailqualität und Stiltreue variieren; professionelle künstlerische Qualität ist damit nicht für beliebige Aufträge bewiesen. Die ursprüngliche vollständige Abnahme durch einen Menschen bleibt eine separate Bewertung.
+- A 32×32 skeleton was created with separate body/equipment layers, inspected as an actual MCP PNG, corrected and exported. The run took 79 seconds.
+- In the subsequent precision edit, the sword became exactly three raster pixels longer. The independent comparison found **11 changed pixels, zero outside the allowed area**. All other layers were identical. The decoded PNG matches the engine raster exactly; the Unity pivot is correctly normalized.
+- Nine more real assets were created: goblin, knight, slime, robot, boss skeleton, sword, potion, key and shield. The sample covers 16–64 pixels, four style profiles and a reference inspection for sword/shield.
+- All ten assets were viewed as images independently of the drawing client. Goblin, slime and potion then received targeted rework on the face or bottle shape, respectively. The palettes were preserved; the other goblin layers and the slime body remained unchanged.
+- The results are recognizable, simple game assets. Detail quality and style fidelity vary; this does not prove professional artistic quality for arbitrary tasks. The original full acceptance by a human remains a separate assessment.
 
-Die lokalen Testartefakte und genauen IDs liegen im ignorierten Ordner `artifacts/`. Nach einem tatsächlichen Service-Neustart waren alle **8 Projekte, 11 Assets und 46 Revisionen** einschließlich Dokumenten, Historie und Reviews identisch. Eines der Assets gehört zum manuellen Editor-Test.
+The local test artifacts and exact IDs are in the ignored folder `artifacts/`. After an actual service restart, all **8 projects, 11 assets and 46 revisions**, including documents, history and reviews, were identical. One of the assets belongs to the manual editor test.
 
 ## Browser
 
-Im echten Browser geprüft: Projekt/Asset anlegen, Stift, Rechteck, Füllen, Auswahl, Verschieben und Kopieren, Hex-Palette, Ebenen anlegen/umbenennen/sperren/entsperren, Undo/Redo, History-Vorschau/Wiederherstellen, Neuladen und Änderungen durch Agenten. Die Browserkonsole war fehlerfrei. Der Direktlink mit `?project=<id>` öffnet das gewünschte Projekt; der schmale Browserbereich bleibt bedienbar.
+Verified in a real browser: creating a project/asset, pencil, rectangle, fill, selection, moving and copying, hex palette, creating/renaming/locking/unlocking layers, undo/redo, history preview/restore, reloading and changes by agents. The browser console was free of errors. The direct link with `?project=<id>` opens the requested project; the narrow browser viewport stays usable.
 
-PNG-/Projektimport und Varianten sind über Backendtests geprüft; die entsprechenden Browser-Dateidialoge wurden nicht zusätzlich manuell geprüft.
+PNG/project import and variants are verified by backend tests; the corresponding browser file dialogs were not additionally checked by hand.
 
-Die Navigationserweiterung wurde im Browser mit Handwerkzeug und Ziehen, Zoom am Mauszeiger, Originalgröße (`1`), Einpassen (`F`), Raster (`Umschalt+G`), Hotkey-Übersicht (`?`) und normaler Texteingabe geprüft. Werkzeug-/Zoomkürzel bleiben im Dialog inaktiv. Revision und SHA-256 des vollständigen Dokuments waren danach identisch. Die Konsole meldete keine Warnungen oder Fehler. Touch-Pinch wurde nicht implementiert.
+The navigation extension was verified in the browser with the hand tool and dragging, zoom at pointer, actual size (`1`), fit (`F`), grid (`Shift+G`), the keyboard shortcuts overview (`?`) and normal text input. Tool/zoom shortcuts stay inactive in the dialog. The revision and SHA-256 of the full document were identical afterwards. The console reported no warnings or errors. Touch pinch was not implemented.
 
-Zusätzlich wurde ein temporärer Service mit In-Memory-Datenbank für einen Browser-Regressionslauf verwendet: Nach einem Strich blieben `Strg+Z` und `Strg+Umschalt+Z` in der historischen Vorschau ohne Änderung am aktuellen Raster oder an den drei Revisionen. Zurück im aktuellen Stand funktionierten Undo und Redo. Der Testservice wurde anschließend beendet. Nach Schließen der Hilfe kehrt der Fokus zum aufrufenden Button zurück.
+In addition, a temporary service with an in-memory database was used for a browser regression run: after a stroke, `Ctrl+Z` and `Ctrl+Shift+Z` in the historical preview made no change to the current raster or the three revisions. Back in the current state, undo and redo worked. The test service was then shut down. After closing the help, focus returns to the button that opened it.
 
-Der [recherchierte Artist Guide](../skills/pixel-artist/references/artist-guide.md) wird über Workflow-Tool, MCP-Ressource und neue/fortgesetzte Runs konsistent ausgeliefert; das ist per Integrationstest geprüft. Auch der neu gestartete echte Service liefert denselben Guide über Tool und Ressource. Die Bildinspektion enthält nun den gespeicherten Asset-Stil. Ein zusätzlicher vollständiger Codex-/Claude-Artist-Durchlauf mit diesen neuen Regeln wurde nicht durchgeführt.
+The [researched Artist Guide](../skills/pixel-artist/references/artist-guide.md) is delivered consistently via the workflow tool, the MCP resource and new/resumed runs; this is verified by an integration test. The newly started real service also delivers the same guide via tool and resource. The image inspection now includes the stored asset style. An additional full Codex/Claude artist run with these new rules was not performed.
 
-## Fehlerprüfung nach der Navigationserweiterung
+## Bug check after the navigation extension
 
-Ein weiterer Browserlauf mit separater In-Memory-Datenbank bestätigt:
+Another browser run with a separate in-memory database confirms:
 
-- Der zuvor reproduzierte Absturz beim Wechsel von einer historischen großen Palette zur aktuellen kleineren Palette ist behoben. Eine gültige Farbe bleibt gewählt.
-- Farbanzahl und Prüfhinweise beziehen sich in der Versionsvorschau auf die angezeigte Revision.
-- Eine um 2,5 Sekunden verzögerte Historienantwort überschreibt nach einem Assetwechsel nicht den Verlauf des neuen Assets.
-- Während einer um fünf Sekunden verzögerten Speicherantwort eintreffende externe Änderungen werden danach nachgeladen. Die lokale und externe Pixeländerung bleiben erhalten; veraltete Undo-Einträge werden verworfen.
-- Nach Trennung der Ereignisverbindung erscheint auch eine während der Trennung gespeicherte Revision nach der Wiederverbindung automatisch.
+- The previously reproduced crash when switching from a large historical palette to the current smaller palette is fixed. A valid color stays selected.
+- In the version preview, the color count and check notes refer to the displayed revision.
+- A history response delayed by 2.5 seconds does not overwrite the new asset's history after an asset switch.
+- External changes that arrive during a save response delayed by five seconds are loaded afterwards. Both the local and the external pixel change are preserved; outdated undo entries are discarded.
+- After the event connection drops, a revision saved during the disconnect also appears automatically after reconnecting.
 
-Neue automatisierte Regressionstests prüfen vollständig transparente PNGs bei gesperrter Projektpalette und wiederholte/ungültige Suchparameter. Der kopierte Agentenauftrag verwendet den gespeicherten Asset-Stil und die tatsächliche Serveradresse (im Vite-Entwicklungsbetrieb den konfigurierten Backend-Port 4317). Datei- und Zwischenablagedialoge wurden in diesem Lauf nicht vollständig geprüft.
+New automated regression tests check fully transparent PNGs with a locked project palette and repeated/invalid search parameters. The copied agent task uses the stored asset style and the actual server address (in Vite development mode, the configured backend port 4317). File and clipboard dialogs were not fully checked in this run.
 
-## Offene Abnahme
+## Pending acceptance
 
-Claude Code **2.1.302** meldete den Pixelator-MCP-Server als verbunden. Der tatsächliche Artist-Durchlauf wurde vor der ersten Generierung durch das Wochenlimit des Claude-Kontos abgewiesen. Claude-Bildverständnis und künstlerische Ergebnisse sind deshalb noch nicht abgenommen. Der zehnteilige Codex-Test ersetzt diesen zweiten Clienttest nicht.
+Claude Code **2.1.302** reported the Pixelator MCP server as connected. The actual artist run was rejected by the Claude account's weekly limit before the first generation. Claude's image understanding and artistic results have therefore not yet been accepted. The ten-part Codex test does not replace this second client test.
 
-Tilesets und Asset Packs gehören zum nächsten Ausbau; Animationen und Sprite-Sheets sind seit der Ergänzung oben vorhanden. Projektimporte sind in V1 auf 128 MB begrenzt; größere Historien benötigen derzeit ein Datenbank-Backup.
+Tilesets and asset packs are part of the next expansion; animations and sprite sheets have been available since the addendum above. Project imports are limited to 128 MB in V1; larger histories currently require a database backup.
