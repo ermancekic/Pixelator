@@ -132,4 +132,4 @@ New automated regression tests check fully transparent PNGs with a locked projec
 
 Claude Code **2.1.302** reported the Pixelator MCP server as connected. The actual artist run was rejected by the Claude account's weekly limit before the first generation. Claude's image understanding and artistic results have therefore not yet been accepted. The ten-part Codex test does not replace this second client test.
 
-Tilesets and asset packs are part of the next expansion; animations and sprite sheets have been available since the addendum above. Project imports are limited to 128 MB in V1; larger histories currently require a database backup.
+Asset packs are part of the next expansion; tilesets, animations and sprite sheets have been available since the addenda above. Project imports are limited to 128 MB in V1; larger histories currently require a database backup.

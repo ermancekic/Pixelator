@@ -61,7 +61,7 @@ Test separately with the Codex/Claude/Antigravity clients actually in use. The a
 
 If a client cannot forward image responses, this artist workflow is not yet accepted there. `record_review` proves a logged observation, not visual understanding by the model.
 
-## Visual sample: 20 real tasks
+## Visual sample: 23 real tasks
 
 Run each task with the real external agent. Keep the first complete drawing and the final revision after at most three correction rounds. Judge subject and style at native size and enlarged: recognizable, readable in-game, requirements met, better/same/worse after correction. Record duration, client/model, asset/revision IDs and open issues. Do not derive any assessment solely from the drawing agent's self-assessment.
 
