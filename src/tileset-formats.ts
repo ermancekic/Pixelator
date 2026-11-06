@@ -163,13 +163,13 @@ export function godotTileset(doc: PixelDocument, image: string, layout: TilesetL
   return ['[gd_resource type="TileSet" load_steps=3 format=3]', '', `[ext_resource type="Texture2D" path=${godotString(image)} id="1_texture"]`, '', ...atlas, '', ...resource].join('\n') + '\n';
 }
 
-/** Manual Unity import settings: one sprite per tile at one unit per tile, plus animated tiles and tile metadata. */
-export function unityTilesetManifest(assetId: string, revisionId: string, name: string, doc: PixelDocument, image: string, layout: TilesetLayout) {
+/** Manual Unity import settings: one sprite per tile at one unit per tile (unless pixelsPerUnit says otherwise), plus animated tiles and tile metadata. */
+export function unityTilesetManifest(assetId: string, revisionId: string, name: string, doc: PixelDocument, image: string, layout: TilesetLayout, pixelsPerUnit = layout.tileWidth) {
   const tileset = requireTileset(doc); const sprite = (id: number) => `${name}_${id}`;
   const rect = (id: number) => { const origin = tileOrigin(layout, id); return { x: origin.x, y: layout.imageHeight - origin.y - layout.tileHeight, width: layout.tileWidth, height: layout.tileHeight }; };
   return {
     schemaVersion: 1, assetId, revisionId, name, texture: image, textureWidth: layout.imageWidth, textureHeight: layout.imageHeight,
-    tileWidth: layout.tileWidth, tileHeight: layout.tileHeight, pixelsPerUnit: layout.tileWidth,
+    tileWidth: layout.tileWidth, tileHeight: layout.tileHeight, pixelsPerUnit,
     textureImporter: { textureType: 'Sprite', spriteMode: 'Multiple', filterMode: 'Point', textureCompression: 'Uncompressed', mipmapEnabled: false, alphaIsTransparency: true, wrapMode: 'Clamp', spriteMeshType: 'FullRect' },
     rectCoordinateSystem: 'pixels, bottom-left origin',
     sprites: Array.from({ length: layout.tileCount }, (_, id) => ({ name: sprite(id), rect: rect(id), pivot: { x: 0.5, y: 0.5 } })),

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { PNG } from 'pngjs';
 import { createApp } from '../src/server.js';
 import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, McpStatus, Project } from '../src/types.js';
@@ -864,5 +867,142 @@ describe('project overview', () => {
     expect(first.previews).toHaveLength(4);
     expect(first.previews[0]).toEqual({ id: detail.asset.id, name: 'Knight', headRevisionId: painted.revision.id });
     expect(second).toMatchObject({ id: empty.id, assetCount: 0, updatedAt: empty.createdAt, previews: [] });
+  });
+});
+
+describe('agent asset pipeline over MCP', () => {
+  const tools = (app: FastifyInstance) => ({
+    call: async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      return result;
+    },
+    error: async (name: string, args: Record<string, unknown>) => {
+      const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+      expect(result.isError).toBe(true);
+      return JSON.parse(result.content[0].text!).error as { code: string; message: string };
+    },
+  });
+  // Schema violations are answered by the MCP SDK itself, with a plain-text message naming the field.
+  const invalidInput = async (app: FastifyInstance, name: string, args: Record<string, unknown>) => {
+    const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+    expect(result.isError).toBe(true);
+    return result.content[0].text!;
+  };
+  const image = (result: ToolResult) => PNG.sync.read(Buffer.from(result.content.find(content => content.type === 'image')!.data!, 'base64'));
+  const at = (png: PNG, x: number, y: number) => [...png.data.subarray((y * png.width + x) * 4, (y * png.width + x) * 4 + 4)];
+
+  it('inspects on a chosen background and keeps tile gutters distinct from it', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const { call, error } = tools(app);
+    await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+    const plain = image(await call('inspect_asset', { assetId: detail.asset.id, scale: 1 }));
+    expect(at(plain, 0, 0)).toEqual([0, 0, 0, 0]);
+    const backed = await call('inspect_asset', { assetId: detail.asset.id, scale: 1, background: '#203040' });
+    expect(backed.structuredContent).toMatchObject({ view: { layout: 'frame', background: '#203040' } });
+    expect(at(image(backed), 0, 0)).toEqual([32, 48, 64, 255]);
+    expect(at(image(backed), 1, 1)).toEqual([15, 56, 15, 255]);
+    expect(await invalidInput(app, 'inspect_asset', { assetId: detail.asset.id, background: 'black' })).toContain('background');
+    const tiles = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Floor', type: 'tileset', width: 4, height: 2, tileWidth: 2, tileHeight: 2 } })).json<AssetDetail>();
+    const sheet = await call('inspect_asset', { assetId: tiles.asset.id, preview: 'tiles', scale: 1, background: '#ff00ff' });
+    expect(sheet.structuredContent).toMatchObject({ view: { preview: 'tiles', gutterColor: '#00FFFF', background: '#FF00FF' } });
+    expect([at(image(sheet), 0, 0), at(image(sheet), 2, 0)]).toEqual([[255, 0, 255, 255], [0, 255, 255, 255]]);
+  });
+
+  it('raises the color budget of an existing asset with the palette operation', async () => {
+    const app = await open(); const { detail } = await setup(app); const { call, error } = tools(app);
+    const colors = [...detail.revision.document.palette, '#FFFFFF'];
+    const scope = { layerIds: ['body', 'sword'], allowPaletteChanges: true };
+    expect((await error('apply_operations', { assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'too-many', editScope: scope, operations: [{ op: 'palette', colors }] })).code).toBe('INVALID_PALETTE');
+    await call('apply_operations', { assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'budget', editScope: scope, operations: [{ op: 'palette', colors, maxColors: 8 }] });
+    const current = (await call('get_asset', { assetId: detail.asset.id })).structuredContent as unknown as AssetDetail;
+    expect(current.revision.document).toMatchObject({ maxColors: 8, palette: colors });
+  });
+
+  it('lists runs newest first with filters so a new session finds unfinished work', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const { call } = tools(app);
+    const first = (await call('start_run', { projectId: project.id, assetId: detail.asset.id, prompt: 'Polish the knight' })).structuredContent as unknown as ArtistRun;
+    const second = (await call('start_run', { projectId: project.id, prompt: 'x'.repeat(300) })).structuredContent as unknown as ArtistRun;
+    await call('cancel_run', { runId: second.id });
+    const listed = (await call('list_runs', {})).structuredContent as { total: number; runs: Record<string, unknown>[] };
+    expect(listed.total).toBe(2);
+    expect(listed.runs.map(run => run.id)).toEqual([second.id, first.id]);
+    expect(listed.runs[0]).toMatchObject({ status: 'cancelled', batchCount: 0, reviews: 0, openIssues: 0 });
+    expect(listed.runs[0].prompt).toBe(`${'x'.repeat(200)}…`);
+    expect(listed.runs[0]).not.toHaveProperty('artistGuide');
+    const active = (await call('list_runs', { status: 'active', assetId: detail.asset.id })).structuredContent as { runs: { id: string }[] };
+    expect(active.runs.map(run => run.id)).toEqual([first.id]);
+    expect((await call('list_runs', { projectId: 'project_missing' })).structuredContent).toEqual({ total: 0, runs: [] });
+    expect((await call('list_runs', { limit: 1 })).structuredContent).toMatchObject({ total: 2, runs: [{ id: second.id }] });
+  });
+
+  it('imports PNGs from a local path or base64, cuts sheets and rejects unclear sources', async () => {
+    const app = await open(); const { project } = await setup(app); const { call, error } = tools(app);
+    const dir = mkdtempSync(join(tmpdir(), 'pixelator-import-'));
+    try {
+      const strip = new PNG({ width: 4, height: 2 });
+      strip.data.set([15, 56, 15, 255], 0); strip.data.set([155, 188, 15, 255], (1 * 4 + 3) * 4);
+      const file = join(dir, 'strip.png'); writeFileSync(file, PNG.sync.write(strip));
+      const imported = (await call('import_png', { projectId: project.id, name: 'Strip', type: 'character', tags: ['imported'], path: file, frameWidth: 2, frameHeight: 2, durationMs: 80 })).structuredContent as unknown as AssetDetail;
+      expect(imported.asset).toMatchObject({ name: 'Strip', type: 'character', tags: ['imported'] });
+      expect(imported.revision).toMatchObject({ actor: 'import', document: { width: 2, height: 2, pivot: { x: 1, y: 2 }, frames: [{ id: 'frame-1', durationMs: 80 }, { id: 'frame-2', durationMs: 80 }] } });
+      expect((await call('read_pixels', { assetId: imported.asset.id, frameId: 'frame-2' })).structuredContent).toMatchObject({ rows: ['..', '.2'] });
+      const inline = (await call('import_png', { projectId: project.id, name: 'Inline', type: 'item', pngBase64: PNG.sync.write(strip).toString('base64') })).structuredContent as unknown as AssetDetail;
+      expect(inline.revision.document).toMatchObject({ width: 4, height: 2, pivot: { x: 2, y: 1 } });
+      const base = { projectId: project.id, name: 'Bad', type: 'item' };
+      expect((await error('import_png', base)).code).toBe('INVALID_INPUT');
+      expect((await error('import_png', { ...base, path: file, pngBase64: 'abc' })).code).toBe('INVALID_INPUT');
+      expect((await error('import_png', { ...base, path: 'strip.png' })).code).toBe('INVALID_PATH');
+      expect((await error('import_png', { ...base, path: join(dir, 'strip.txt') })).code).toBe('INVALID_PATH');
+      expect((await error('import_png', { ...base, path: join(dir, 'missing.png') })).code).toBe('NOT_FOUND');
+      expect((await error('import_png', { ...base, path: file, frameWidth: 2 })).code).toBe('SHEET_SIZE');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('renames and retags assets through MCP and REST without adding a revision', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const { call, error } = tools(app);
+    const renamed = await call('update_asset', { assetId: detail.asset.id, name: 'Knight hero', tags: ['hero', 'approved'] });
+    expect(renamed.structuredContent).toMatchObject({ asset: { id: detail.asset.id, name: 'Knight hero', tags: ['hero', 'approved'], headRevisionId: detail.revision.id } });
+    const found = (await call('find_assets', { projectId: project.id, q: 'approved' })).structuredContent as { assets: Asset[] };
+    expect(found.assets.map(asset => asset.id)).toEqual([detail.asset.id]);
+    const patched = await app.inject({ method: 'PATCH', url: `/api/assets/${detail.asset.id}`, payload: { tags: [] } });
+    expect(patched.statusCode, patched.body).toBe(200);
+    expect(patched.json<Asset>()).toMatchObject({ name: 'Knight hero', tags: [] });
+    expect((await app.inject(`/api/assets/${detail.asset.id}/revisions`)).json()).toHaveLength(1);
+    expect((await error('update_asset', { assetId: detail.asset.id })).code).toBe('NOTHING_TO_UPDATE');
+    expect((await app.inject({ method: 'PATCH', url: `/api/assets/${detail.asset.id}`, payload: { name: ' ' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'PATCH', url: '/api/assets/asset_missing', payload: { name: 'Ghost' } })).statusCode).toBe(404);
+  });
+
+  it('exports stable file names into a chosen folder, ships the Unity texture and honors pixels per unit', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const { call, error } = tools(app);
+    const dir = mkdtempSync(join(tmpdir(), 'pixelator-export-'));
+    try {
+      const target = join(dir, 'game', 'sprites');
+      const first = (await call('export_asset', { assetId: detail.asset.id, format: 'png', outputDir: target })).structuredContent as { path: string };
+      expect(first.path).toBe(join(target, 'Knight.png'));
+      await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+      const again = (await call('export_asset', { assetId: detail.asset.id, format: 'png', outputDir: target })).structuredContent as { path: string };
+      expect(again.path).toBe(first.path);
+      expect(at(PNG.sync.read(readFileSync(again.path)), 1, 1)).toEqual([15, 56, 15, 255]);
+      const unity = (await call('export_asset', { assetId: detail.asset.id, format: 'unity', outputDir: target, fileName: 'knight_v2', pixelsPerUnit: 16, scale: 4 })).structuredContent as { files: { path: string; downloadUrl: string }[] };
+      expect(unity.files.map(file => basename(file.path))).toEqual(['knight_v2.png', 'knight_v2.unity.json']);
+      expect([PNG.sync.read(readFileSync(unity.files[0].path)).width, unity.files[0].downloadUrl]).toEqual([8, expect.not.stringContaining('scale=')]);
+      expect(JSON.parse(readFileSync(unity.files[1].path, 'utf8'))).toMatchObject({ pixelsPerUnit: 16 });
+      expect((await app.inject(new URL(unity.files[1].downloadUrl).pathname + new URL(unity.files[1].downloadUrl).search)).json()).toMatchObject({ pixelsPerUnit: 16 });
+      const coin = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Coin', type: 'item', width: 2, height: 2, frames: [{ id: 'a' }, { id: 'b' }], animationTags: [{ name: 'spin', from: 0, to: 1 }] } })).json<AssetDetail>();
+      const animated = (await call('export_asset', { assetId: coin.asset.id, format: 'unity', outputDir: target })).structuredContent as { files: { path: string }[] };
+      expect(animated.files.map(file => basename(file.path))).toEqual(['Coin.sheet.png', 'Coin.unity.json']);
+      expect(JSON.parse(readFileSync(animated.files[1].path, 'utf8'))).toMatchObject({ texture: 'Coin.sheet.png', pixelsPerUnit: 32, textureWidth: 4 });
+      const tagged = (await call('export_asset', { assetId: coin.asset.id, format: 'sheet', tag: 'spin', outputDir: target })).structuredContent as { files: { path: string }[] };
+      expect(tagged.files.map(file => basename(file.path))).toEqual(['Coin-spin.sheet.png', 'Coin-spin.sheet.json']);
+      const tiles = (await app.inject({ method: 'POST', url: '/api/assets', payload: { projectId: project.id, name: 'Wiese', type: 'tileset', width: 4, height: 2, tileWidth: 2, tileHeight: 2 } })).json<AssetDetail>();
+      const tiled = (await call('export_asset', { assetId: tiles.asset.id, format: 'tiled', outputDir: target })).structuredContent as { files: { path: string }[] };
+      expect(tiled.files.map(file => basename(file.path))).toEqual(['Wiese.tileset.png', 'Wiese.tsj', 'Wiese.tsx']);
+      expect(JSON.parse(readFileSync(tiled.files[1].path, 'utf8'))).toMatchObject({ image: 'Wiese.tileset.png' });
+      const unityTiles = (await call('export_asset', { assetId: tiles.asset.id, format: 'unity', outputDir: target, pixelsPerUnit: 16 })).structuredContent as { files: { path: string }[] };
+      expect(JSON.parse(readFileSync(unityTiles.files[1].path, 'utf8'))).toMatchObject({ pixelsPerUnit: 16, tileWidth: 2 });
+      expect((await error('export_asset', { assetId: detail.asset.id, outputDir: 'relative/folder' })).code).toBe('INVALID_PATH');
+      expect(await invalidInput(app, 'export_asset', { assetId: detail.asset.id, outputDir: target, fileName: '../escape' })).toContain('fileName');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

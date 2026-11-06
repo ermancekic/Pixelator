@@ -651,6 +651,23 @@ describe('selection masks, canvas size, merging and palette remapping', () => {
     expect(nearestColor('#FE0101', palette)).toBe(1);
     expect(nearestColor('#000000', ['#00000000', '#101010', '#FFFFFF'])).toBe(1);
   });
+
+  it('raises and lowers the color budget together with the palette', () => {
+    const doc = run(make(), [points([[0, 0, 1], [1, 0, 3]])]).document;
+    expect(doc.maxColors).toBe(3);
+    const grown = [...palette, '#00FF00', '#FFFF00'];
+    expect(() => run(doc, [{ op: 'palette', colors: grown }], full(doc))).toThrow('INVALID_PALETTE');
+    const raised = run(doc, [{ op: 'palette', colors: grown, maxColors: 24 }], full(doc));
+    expect(raised.document).toMatchObject({ maxColors: 24, palette: grown });
+    expect(cel(raised.document, 0)).toEqual(cel(doc, 0));
+    expect(raised.diff.changedPixels).toBe(0);
+    expect(run(raised.document, [{ op: 'palette', colors: grown, maxColors: 5 }], full(doc)).document.maxColors).toBe(5);
+    expect(() => run(raised.document, [{ op: 'palette', colors: grown, maxColors: 4 }], full(doc))).toThrow('INVALID_PALETTE');
+    expect(() => run(doc, [{ op: 'palette', colors: palette, maxColors: 33 }], full(doc))).toThrow('INVALID_COLOR_LIMIT');
+    expect(() => run(doc, [{ op: 'palette', colors: grown, maxColors: 24 }], { layerIds: ['base'] })).toThrow('PALETTE_CHANGE_FORBIDDEN');
+    const locked = { ...doc, paletteLocked: true };
+    expect(() => run(locked, [{ op: 'palette', colors: palette, maxColors: 24 }], full(locked))).toThrow('PALETTE_LOCKED');
+  });
 });
 
 describe('tilesets', () => {

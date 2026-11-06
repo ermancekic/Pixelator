@@ -83,7 +83,7 @@ export const operation = z.discriminatedUnion('op', [
   z.object({ op: z.literal('reorder_frames'), frameIds: z.array(id).min(1).max(64) }).strict(),
   z.object({ op: z.literal('frame_duration'), frameIds: z.array(id).min(1).max(64), durationMs }).strict(),
   z.object({ op: z.literal('set_tags'), tags: z.array(tagInput).max(32) }).strict(),
-  z.object({ op: z.literal('palette'), colors: palette, remap: z.enum(['index', 'nearest']).optional() }).strict(),
+  z.object({ op: z.literal('palette'), colors: palette, remap: z.enum(['index', 'nearest']).optional(), maxColors: z.number().int().min(1).max(32).optional() }).strict(),
   z.object({ op: z.literal('pivot'), x: z.number().min(0), y: z.number().min(0) }).strict(),
   z.object({ op: z.literal('tileset'), tileWidth: size.optional(), tileHeight: size.optional(), terrainMode: terrainMode.optional(), terrains: z.array(terrainType).max(8).optional() }).strict(),
   z.object({ op: z.literal('remove_tileset') }).strict(),
@@ -111,6 +111,7 @@ export const createAssetInput = z.object({
   tileWidth: size.optional(), tileHeight: size.optional(),
   sourceAssetId: id.optional(), runId: id.optional(),
 }).strict();
+export const assetUpdate = z.object({ name: name.optional(), tags: z.array(z.string().max(80)).max(30).optional() }).strict();
 export const projectInput = z.object({ name, preset: preset.optional() }).strict();
 export const assetSearch = z.object({ projectId: id, q: z.string().max(300).optional(), type: z.union([assetType, z.literal('')]).optional() }).strict();
 export const projectUpdate = z.object({ name: name.optional(), style: projectStyle.optional() }).strict();

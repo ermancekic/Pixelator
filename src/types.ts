@@ -133,7 +133,7 @@ export type Operation =
   | { op: 'reorder_layers'; layerIds: string[] }
   | { op: 'merge_layers'; layerIds: string[] }
   | { op: 'resize_canvas'; width: number; height: number; offsetX?: number; offsetY?: number }
-  | { op: 'palette'; colors: string[]; remap?: 'index' | 'nearest' }
+  | { op: 'palette'; colors: string[]; remap?: 'index' | 'nearest'; maxColors?: number }
   | { op: 'pivot'; x: number; y: number }
   | { op: 'tileset'; tileWidth?: number; tileHeight?: number; terrainMode?: TerrainMode; terrains?: TerrainType[] }
   | { op: 'remove_tileset' }

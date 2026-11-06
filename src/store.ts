@@ -138,6 +138,18 @@ export class Store extends EventEmitter {
     this.changed('asset-deleted', asset.projectId, id);
     return { id, projectId: asset.projectId };
   }
+  /** Renames or retags an asset; metadata only, so no revision is added. */
+  updateAsset(id: string, input: unknown): Asset {
+    const changes = schema.assetUpdate.parse(input);
+    if (changes.name === undefined && changes.tags === undefined) throw new AppError('NOTHING_TO_UPDATE', 'Give a new name or tags.');
+    const asset = this.transaction(() => {
+      const updated: Asset = { ...this.read<Asset>('assets', id), ...changes, updatedAt: now() };
+      this.putAsset(updated);
+      return updated;
+    });
+    this.changed('asset', asset.projectId, id);
+    return asset;
+  }
   getRevision(assetId: string, revisionId?: string): Revision {
     const id = revisionId ?? this.read<Asset>('assets', assetId).headRevisionId;
     const revision = this.read<Revision>('revisions', id);

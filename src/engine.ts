@@ -50,7 +50,7 @@ function requireValue(condition: unknown, code: string, message: string): assert
 
 function paletteIssues(palette: unknown, maxColors: number): Issue[] {
   const issue = (message: string): Issue[] => [{ code: 'INVALID_PALETTE', severity: 'error', message }];
-  if (!Array.isArray(palette) || palette.length < 2 || palette.length > maxColors + 1) return issue('Palette must contain transparency and 1..maxColors opaque colors.');
+  if (!Array.isArray(palette) || palette.length < 2 || palette.length > maxColors + 1) return issue(`Palette must contain transparency and 1..${maxColors} opaque colors.`);
   if (palette[0] !== '#00000000') return issue('Palette index 0 must be #00000000.');
   if (Array.from(palette.slice(1)).some(color => typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color))) return issue('Opaque palette colors must be #RRGGBB.');
   if (new Set(palette.map(color => color.toUpperCase())).size !== palette.length) return issue('Palette colors must be unique.');
@@ -835,7 +835,10 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       case 'palette': {
         requireValue(fullScope && editScope.allowPaletteChanges === true, 'PALETTE_CHANGE_FORBIDDEN', 'Palette changes require full scope and allowPaletteChanges.');
         requireValue(!doc.paletteLocked, 'PALETTE_LOCKED', 'This asset palette is locked.');
-        const issues = paletteIssues(operation.colors, doc.maxColors);
+        // maxColors raises or lowers the color budget; the new palette must fit it.
+        const maxColors = operation.maxColors ?? doc.maxColors;
+        requireValue(integer(maxColors) && maxColors >= 1 && maxColors <= 32, 'INVALID_COLOR_LIMIT', 'maxColors must be an integer in 1..32.');
+        const issues = paletteIssues(operation.colors, maxColors);
         requireValue(!issues.length, 'INVALID_PALETTE', issues[0]?.message ?? 'Invalid palette.');
         requireValue(operation.remap === undefined || operation.remap === 'index' || operation.remap === 'nearest', 'INVALID_OPERATION', 'Palette remap must be index or nearest.');
         // index keeps every pixel's index; nearest moves each color to the closest color of the new palette.
@@ -846,6 +849,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         }
         if (operation.remap === 'nearest') for (const frame of doc.frames) for (const layer of doc.layers) frame.cels[layer.id] = frame.cels[layer.id].map(index => mapping[index]);
         doc.palette = [...operation.colors];
+        doc.maxColors = maxColors;
         break;
       }
       case 'pivot': {

@@ -2,6 +2,14 @@
 
 The first version is implemented locally and runs on a shared raster engine for the browser and MCP. This verification covers the state as of 17 October 2026; it is not a general guarantee for every subject or agent model.
 
+## Addendum: Agent workflow gaps
+
+On 6 November 2026, **238 tests in 16 files**, the TypeScript check and the production build passed. Newly tested: the inspection `background` for frames, sheets and tile previews; `maxColors` on the `palette` operation; the MCP tools `import_png`, `update_asset` and `list_runs` plus `PATCH /api/assets/:id`; `export_asset` with `outputDir`, `fileName` and `pixelsPerUnit`, with Unity exports now including their texture.
+
+A transparent test PNG like an inspection image appeared on white in Claude Code: a dark outline stayed visible, a #DEEED6 edge barely did. Rendered with a slate `background`, both edges are clearly visible. Other clients may flatten transparency to black instead. Started via `npm --prefix … run -s mcp:stdio` from another folder, the stdio bridge wrote only JSON-RPC to stdout.
+
+**Not verified:** a real agent run with the new options, the stdio bridge commands inside Claude Code and Codex, and a Unity import with the chosen pixels per unit.
+
 ## Addendum: Export window, menu bar and language
 
 On 17 October 2026, **229 tests in 16 files**, the TypeScript check and the production build passed. Newly tested: every interface text from `t()`/`msg()` has an English translation with the same placeholders, with no orphaned entries; static and dynamic server messages are translated for the German interface; settings from browser storage are validated; fit zoom and the shortcuts `Ctrl+,`, `Ctrl+B`, `Ctrl+J`. Server messages are now English, including for MCP clients.

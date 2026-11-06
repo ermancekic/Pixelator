@@ -6,12 +6,19 @@ import type { PixelDocument } from './types.js';
 export const ONION_COLORS = { before: ['#3060FF', '#7090FF', '#B0C0FF'], after: ['#FF4040', '#FF8080', '#FFC0C0'] } as const;
 export const GUTTER_CANDIDATES = ['#FF00FF', '#00FFFF', '#FFFF00', '#00FF00', '#FF8000', '#8000FF'];
 
-export interface SheetOptions { frameIds?: string[]; columns?: number; scale?: number; gutter?: number; onion?: { before?: number; after?: number } }
+/** background (#RRGGBB) fills transparent pixels of inspection renders; the gutter color avoids it as well as the palette. */
+export interface SheetOptions { frameIds?: string[]; columns?: number; scale?: number; gutter?: number; onion?: { before?: number; after?: number }; background?: string }
+
+/** The first gutter candidate that is neither a palette color nor the inspection background. */
+export function gutterColorFor(palette: string[], background?: string): string {
+  const taken = [...palette, ...(background ? [background] : [])].map(color => color.toUpperCase());
+  return GUTTER_CANDIDATES.find(color => !taken.includes(color)) ?? GUTTER_CANDIDATES[0];
+}
 export interface SheetCell { frameId: string; column: number; row: number; x: number; y: number; width: number; height: number; durationMs: number }
 export interface SheetLayout { columns: number; rows: number; gutter: number; gutterColor: string | null; width: number; height: number; cells: SheetCell[] }
 
 /** Positions of the frames in a sheet, in source pixels (before scaling). */
-export function sheetLayout(document: PixelDocument, { frameIds, columns, gutter = 0 }: SheetOptions = {}): SheetLayout {
+export function sheetLayout(document: PixelDocument, { frameIds, columns, gutter = 0, background }: SheetOptions = {}): SheetLayout {
   const ids = frameIds ?? document.frames.map(frame => frame.id);
   if (!ids.length) throw new AppError('INVALID_FRAMES', 'At least one frame is required.');
   const frames = ids.map(id => {
@@ -22,8 +29,7 @@ export function sheetLayout(document: PixelDocument, { frameIds, columns, gutter
   const count = Math.max(1, Math.min(columns ?? frames.length, frames.length));
   if (!Number.isInteger(count) || !Number.isInteger(gutter) || gutter < 0 || gutter > 8) throw new AppError('INVALID_LAYOUT', 'Columns and spacing must be valid whole numbers.');
   const rows = Math.ceil(frames.length / count);
-  const palette = document.palette.map(color => color.toUpperCase());
-  const gutterColor = gutter ? GUTTER_CANDIDATES.find(color => !palette.includes(color)) ?? GUTTER_CANDIDATES[0] : null;
+  const gutterColor = gutter ? gutterColorFor(document.palette, background) : null;
   return {
     columns: count, rows, gutter, gutterColor,
     width: count * document.width + (count - 1) * gutter, height: rows * document.height + (rows - 1) * gutter,

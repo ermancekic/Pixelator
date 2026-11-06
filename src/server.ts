@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { Store, AppError } from './store.js';
 import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
-import { framesFor, renderGif, renderPng, renderSheet, renderThumbnail, importPng, sheetLayout, sheetManifest, sliceSheet, unityManifest, unitySheetManifest } from './images.js';
+import { documentFromPng, framesFor, renderGif, renderPng, renderSheet, renderThumbnail, sheetLayout, sheetManifest, unityManifest, unitySheetManifest } from './images.js';
 import { writePalette } from './palette-formats.js';
 import { godotTileset, renderTilesetImage, tiledTileset, tiledTilesetXml, tilesetLayout, unityTilesetManifest } from './tileset-export.js';
 import * as schema from './contracts.js';
@@ -89,6 +89,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   });
   app.post('/api/assets', request => store.createAsset(request.body));
   app.get<{ Params: { id: string } }>('/api/assets/:id', request => store.getAsset(request.params.id));
+  app.patch<{ Params: { id: string } }>('/api/assets/:id', request => store.updateAsset(request.params.id, request.body));
   app.delete<{ Params: { id: string } }>('/api/assets/:id', request => store.deleteAsset(request.params.id));
   app.post<{ Params: { id: string } }>('/api/assets/:id/operations', request => store.apply(request.params.id, request.body));
   app.get<{ Params: { id: string }; Querystring: { summary?: string } }>('/api/assets/:id/revisions', request => {
@@ -115,6 +116,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
       format: z.enum(['png', 'json', 'unity', 'sheet', 'sheet-json', 'gif', 'gpl', 'hex', 'pal', 'tileset', 'tsj', 'tsx', 'tres']).default('png'), frameId: z.string().min(1).max(100).optional(), tag: z.string().min(1).max(160).optional(),
       columns: z.coerce.number().int().min(1).max(64).optional(), scale: z.coerce.number().int().min(1).max(16).optional(),
       extrude: z.coerce.number().int().min(0).max(4).optional(), spacing: z.coerce.number().int().min(0).max(8).optional(),
+      pixelsPerUnit: z.coerce.number().int().min(1).max(4096).optional(),
     }).strict().parse(request.query);
     const { asset, revision } = store.getAsset(request.params.id); const { document } = revision;
     const name = asset.name.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 80) || 'asset';
@@ -136,8 +138,8 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     if (query.format === 'gif') return reply.type('image/gif').send(renderGif(document, { tag: query.tag, scale }));
     if (query.format === 'gpl' || query.format === 'hex' || query.format === 'pal') return reply.type('text/plain; charset=utf-8').send(writePalette(document.palette, query.format, asset.name));
     if (query.format === 'sheet-json') return reply.type('application/json').send(sheetManifest(asset.name, `${name}.sheet.png`, document, sheetLayout(document, { frameIds: framesFor(document, query.tag), columns: query.columns }), scale));
-    if (query.format === 'unity' && document.tileset) return reply.type('application/json').send(unityTilesetManifest(asset.id, revision.id, asset.name, document, tileImage, tiles()));
-    if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheetLayout(document, { frameIds: framesFor(document, query.tag), columns: query.columns }) }) : unityManifest(asset.id, revision.id, asset.name, document));
+    if (query.format === 'unity' && document.tileset) return reply.type('application/json').send(unityTilesetManifest(asset.id, revision.id, asset.name, document, tileImage, tiles(), query.pixelsPerUnit));
+    if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheetLayout(document, { frameIds: framesFor(document, query.tag), columns: query.columns }) }, query.pixelsPerUnit) : unityManifest(asset.id, revision.id, asset.name, document, query.pixelsPerUnit));
     return reply.type('application/json').send(store.exportAsset(asset.id));
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/export', (request, reply) => reply.type('application/json').header('Content-Disposition', 'attachment; filename="project.pixelator.json"').send(store.exportProject(request.params.id)));
@@ -148,10 +150,7 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
   });
   app.post('/api/import', request => {
     const input = schema.importPngInput.parse(request.body);
-    const style = store.getProject(input.projectId).style;
-    const image = importPng(input.pngBase64, style.maxColors, style.paletteLocked);
-    const doc = input.frameWidth && input.frameHeight ? sliceSheet(image, input.frameWidth, input.frameHeight, { frameCount: input.frameCount, durationMs: input.durationMs }) : image;
-    if (input.type === 'character') doc.pivot = { x: doc.width / 2, y: doc.height };
+    const doc = documentFromPng(input.pngBase64, store.getProject(input.projectId).style, input);
     return store.importDocument({ projectId: input.projectId, name: input.name, type: input.type }, doc);
   });
   app.get('/api/runs', () => store.listRuns());

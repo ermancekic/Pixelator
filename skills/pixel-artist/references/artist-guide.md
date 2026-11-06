@@ -1,6 +1,6 @@
 # Pixelator Artist Guide
 
-Version: 2026-10-17.2. Apply this guide to every Pixelator creation, variant, edit and visual review. These are working defaults, not a mandate to change the requested aesthetic. Explicit user direction and the saved project/asset style take precedence; explain relevant departures in the review. A local edit must stay local even when unrelated art could be improved.
+Version: 2026-11-06.1. Apply this guide to every Pixelator creation, variant, edit and visual review. These are working defaults, not a mandate to change the requested aesthetic. Explicit user direction and the saved project/asset style take precedence; explain relevant departures in the review. A local edit must stay local even when unrelated art could be improved.
 
 ## Design for the game
 
@@ -32,7 +32,7 @@ Keep the silhouette readable in every frame at native size, and keep proportions
 
 ## Required visual review
 
-Inspect the exact current revision with `inspect_asset` at `scale: 1` and at an enlarged integer scale. For animations inspect the sprite sheet of all frames, with onion skin when judging motion. Review the actual PNGs. If the client cannot show them, finish as `needs_review`.
+Inspect the exact current revision with `inspect_asset` at `scale: 1` and at an enlarged integer scale, on the intended game background (`background`; when it is unknown, on a dark and a light color). For animations inspect the sprite sheet of all frames, with onion skin when judging motion. Review the actual PNGs. If the client cannot show them, finish as `needs_review`.
 
 In `record_review.observations`, give concrete evidence for each applicable point; mark a point not applicable with a reason rather than inventing a problem:
 

@@ -197,6 +197,29 @@ describe('animation sheets and engine metadata', () => {
     expect(pixel(last, 0, 0)).toEqual([255, 255, 255, 255]);
   });
 
+  it('paints an inspection background under transparent pixels only and keeps the gutter distinct from it', () => {
+    const doc = walk();
+    expect(pixel(PNG.sync.read(renderPng(doc, 1, 'idle')), 1, 0)).toEqual([0, 0, 0, 0]);
+    const single = PNG.sync.read(renderPng(doc, 2, 'idle', '#102030'));
+    expect(pixel(single, 1, 1)).toEqual([255, 0, 0, 255]);
+    expect(pixel(single, 2, 0)).toEqual([16, 32, 48, 255]);
+    const { png, layout } = renderSheet(doc, { columns: 2, gutter: 1, background: '#ff00ff' });
+    expect(layout.gutterColor).toBe('#00FFFF');
+    const sheet = PNG.sync.read(png);
+    expect(pixel(sheet, 1, 0)).toEqual([255, 0, 255, 255]);
+    expect(pixel(sheet, 2, 0)).toEqual([0, 255, 255, 255]);
+    expect(pixel(sheet, 4, 2)).toEqual([0, 255, 255, 255]);
+    const tinted = PNG.sync.read(renderSheet(doc, { frameIds: ['walk_1'], onion: { before: 1 }, background: '#102030' }).png);
+    expect(pixel(tinted, 0, 0)).toEqual([48, 96, 255, 255]);
+  });
+
+  it('writes the requested Unity pixels per unit and keeps 32 as the sprite fallback', () => {
+    const doc = walk(); const layout = sheetLayout(doc);
+    expect(unityManifest('a', 'r', 'Hero', doc).pixelsPerUnit).toBe(32);
+    expect(unityManifest('a', 'r', 'Hero', doc, 16).pixelsPerUnit).toBe(16);
+    expect(unitySheetManifest('a', 'r', 'Hero', doc, { image: 'hero.sheet.png', layout }, 16).pixelsPerUnit).toBe(16);
+  });
+
   it('describes sheets in Aseprite array format and as Unity sprites with clips per tag', () => {
     const doc = walk();
     const layout = sheetLayout(doc);

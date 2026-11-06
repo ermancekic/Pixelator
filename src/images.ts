@@ -4,11 +4,11 @@ import { encodeGif } from './gif.js';
 import { renderTerrainMap, terrainMap, tileGrid } from './tiles.js';
 import type { TerrainMap } from './tiles.js';
 import { AppError } from './errors.js';
-import { framesFor, gifFrameIds, GUTTER_CANDIDATES, ONION_COLORS, sheetLayout } from './export-layout.js';
+import { framesFor, gifFrameIds, gutterColorFor, ONION_COLORS, sheetLayout } from './export-layout.js';
 import type { SheetLayout, SheetOptions } from './export-layout.js';
 export { framesFor, gifFrameIds, ONION_COLORS, sheetLayout } from './export-layout.js';
 export type { SheetCell, SheetLayout, SheetOptions } from './export-layout.js';
-import type { AnimationTag, PixelDocument } from './types.js';
+import type { AnimationTag, AssetType, PixelDocument, ProjectStyle } from './types.js';
 
 const validScale = (scale: number) => {
   if (!Number.isInteger(scale) || scale < 1 || scale > 32) throw new AppError('RENDER_SIZE', 'Zoom must be a whole number from 1 to 32.');
@@ -27,9 +27,11 @@ function blit(png: PNG, rgba: Uint8Array, width: number, height: number, scale: 
   }
 }
 
-export function renderPng(document: PixelDocument, scale = 1, frameId?: string): Buffer {
+/** background (#RRGGBB) paints under transparent pixels for inspection; exports keep real transparency. */
+export function renderPng(document: PixelDocument, scale = 1, frameId?: string, background?: string): Buffer {
   validScale(scale);
   const rgba = composite(document, frameId);
+  fillTransparent(rgba, background);
   const png = new PNG({ width: document.width * scale, height: document.height * scale });
   if (scale === 1) png.data.set(rgba);
   else blit(png, rgba, document.width, document.height, scale);
@@ -52,6 +54,13 @@ export function renderThumbnail(document: PixelDocument, maxSize = 96): Buffer {
 }
 
 const rgb = (hex: string) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), 255];
+
+/** Paints an inspection background under transparent pixels, so clients need not guess how to flatten alpha. */
+function fillTransparent(rgba: Uint8Array | Uint8ClampedArray, background?: string) {
+  if (!background) return;
+  const color = rgb(background);
+  for (let i = 0; i < rgba.length; i += 4) if (!rgba[i + 3]) rgba.set(color, i);
+}
 
 /** Renders frames side by side; gutters and onion tints are inspection aids, not asset pixels. */
 export function renderSheet(document: PixelDocument, options: SheetOptions = {}): { png: Buffer; layout: SheetLayout } {
@@ -80,6 +89,7 @@ export function renderSheet(document: PixelDocument, options: SheetOptions = {})
         for (let i = 0; i < mask.length; i++) if (mask[i] && !visible[i]) rgba.set(color, i * 4);
       }
     }
+    fillTransparent(rgba, options.background);
     blit(png, rgba, document.width, document.height, scale, cell.x * scale, cell.y * scale);
   }
   return { png: PNG.sync.write(png), layout };
@@ -127,8 +137,8 @@ export function sheetManifest(name: string, image: string, document: PixelDocume
   };
 }
 
-export function importPng(base64: string, maxColors: number, paletteLocked = false): PixelDocument {
-  const bytes = Buffer.from(base64.replace(/^data:image\/png;base64,/, ''), 'base64');
+export function importPng(source: string | Buffer, maxColors: number, paletteLocked = false): PixelDocument {
+  const bytes = typeof source === 'string' ? Buffer.from(source.replace(/^data:image\/png;base64,/, ''), 'base64') : source;
   if (bytes.length < 33 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new AppError('PNG_REQUIRED', 'A valid PNG file is required.');
   const width = bytes.readUInt32BE(16);
   const height = bytes.readUInt32BE(20);
@@ -179,21 +189,33 @@ export function sliceSheet(sheet: PixelDocument, frameWidth: number, frameHeight
   return document;
 }
 
+export interface PngImportOptions { type: AssetType; frameWidth?: number; frameHeight?: number; frameCount?: number; durationMs?: number }
+
+/** A PNG (base64 or bytes) as a document under the project's color rules, optionally cut into frames; characters stand on the bottom center. */
+export function documentFromPng(source: string | Buffer, style: Pick<ProjectStyle, 'maxColors' | 'paletteLocked'>, options: PngImportOptions): PixelDocument {
+  if ((options.frameWidth === undefined) !== (options.frameHeight === undefined)) throw new AppError('SHEET_SIZE', 'frameWidth and frameHeight belong together.');
+  const image = importPng(source, style.maxColors, style.paletteLocked);
+  const doc = options.frameWidth && options.frameHeight ? sliceSheet(image, options.frameWidth, options.frameHeight, { frameCount: options.frameCount, durationMs: options.durationMs }) : image;
+  if (options.type === 'character') doc.pivot = { x: doc.width / 2, y: doc.height };
+  return doc;
+}
+
 const importer = { textureType: 'Sprite', filterMode: 'Point', textureCompression: 'Uncompressed', mipmapEnabled: false, alphaIsTransparency: true, wrapMode: 'Clamp', spriteMeshType: 'FullRect' };
 
-const unityBase = (assetId: string, revisionId: string, name: string, doc: PixelDocument) => ({
-  schemaVersion: 1, assetId, revisionId, name, width: doc.width, height: doc.height, pixelsPerUnit: 32,
+// A game should use one pixelsPerUnit for sprites and tilesets, usually its tile size; 32 is only the fallback.
+const unityBase = (assetId: string, revisionId: string, name: string, doc: PixelDocument, pixelsPerUnit = 32) => ({
+  schemaVersion: 1, assetId, revisionId, name, width: doc.width, height: doc.height, pixelsPerUnit,
   pivot: { x: doc.pivot.x / doc.width, y: 1 - doc.pivot.y / doc.height }, pivotCoordinateSystem: 'normalized, bottom-left origin',
 });
 
 /** Manual Unity import settings for a single sprite. */
-export function unityManifest(assetId: string, revisionId: string, name: string, doc: PixelDocument) {
-  return { ...unityBase(assetId, revisionId, name, doc), textureImporter: { ...importer, spriteMode: 'Single' } };
+export function unityManifest(assetId: string, revisionId: string, name: string, doc: PixelDocument, pixelsPerUnit?: number) {
+  return { ...unityBase(assetId, revisionId, name, doc, pixelsPerUnit), textureImporter: { ...importer, spriteMode: 'Single' } };
 }
 
 /** Manual Unity import settings for a sprite sheet: one sprite per frame and one clip per tag. */
-export function unitySheetManifest(assetId: string, revisionId: string, name: string, doc: PixelDocument, sheet: { image: string; layout: SheetLayout }) {
-  const base = unityBase(assetId, revisionId, name, doc); const { pivot } = base;
+export function unitySheetManifest(assetId: string, revisionId: string, name: string, doc: PixelDocument, sheet: { image: string; layout: SheetLayout }, pixelsPerUnit?: number) {
+  const base = unityBase(assetId, revisionId, name, doc, pixelsPerUnit); const { pivot } = base;
   const { layout } = sheet; const frameIds = layout.cells.map(cell => cell.frameId);
   const spriteName = (frameId: string) => `${name}_${frameId}`;
   const clips = doc.tags.length ? exportedTags(doc, frameIds) : [{ name, from: 0, to: frameIds.length - 1, direction: 'forward' as const, loop: true }];
@@ -217,19 +239,19 @@ const encode = (width: number, height: number, rgba: Uint8Array | Uint8ClampedAr
 };
 
 /** The frame repeated 3×3 so seams at the canvas edges become visible. */
-export function renderWrapPreview(document: PixelDocument, scale = 1, frameId?: string): { png: Buffer; width: number; height: number } {
-  const rgba = composite(document, frameId); const width = document.width * 3; const height = document.height * 3;
+export function renderWrapPreview(document: PixelDocument, scale = 1, frameId?: string, background?: string): { png: Buffer; width: number; height: number } {
+  const rgba = composite(document, frameId); fillTransparent(rgba, background); const width = document.width * 3; const height = document.height * 3;
   const out = new Uint8Array(width * height * 4);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) out.set(rgba.subarray(((y % document.height) * document.width + x % document.width) * 4, ((y % document.height) * document.width + x % document.width) * 4 + 4), (y * width + x) * 4);
   return { png: encode(width, height, out, scale), width: width * scale, height: height * scale };
 }
 
 /** Tiles separated by a one-pixel gutter in a color outside the palette, to judge every tile on its own. */
-export function renderTileSheet(document: PixelDocument, scale = 1, frameId?: string): { png: Buffer; width: number; height: number; gutterColor: string } {
+export function renderTileSheet(document: PixelDocument, scale = 1, frameId?: string, background?: string): { png: Buffer; width: number; height: number; gutterColor: string } {
   if (!document.tileset) throw new AppError('NO_TILESET', 'This asset has no tile grid.');
   const { tileWidth: tw, tileHeight: th } = document.tileset; const { columns, rows } = tileGrid(document.tileset, document.width, document.height);
   const width = columns * tw + columns - 1; const height = rows * th + rows - 1; const rgba = composite(document, frameId);
-  const palette = document.palette.map(color => color.toUpperCase()); const gutterColor = GUTTER_CANDIDATES.find(color => !palette.includes(color)) ?? GUTTER_CANDIDATES[0];
+  fillTransparent(rgba, background); const gutterColor = gutterColorFor(document.palette, background);
   const out = new Uint8Array(width * height * 4); const gutter = rgb(gutterColor);
   for (let i = 0; i < width * height; i++) out.set(gutter, i * 4);
   for (let y = 0; y < document.height; y++) for (let x = 0; x < document.width; x++) {
@@ -240,10 +262,11 @@ export function renderTileSheet(document: PixelDocument, scale = 1, frameId?: st
 }
 
 /** A sample map painted with the labeled tiles of one terrain; magenta cells mark combinations without a tile. */
-export function renderTerrainPreview(document: PixelDocument, terrain = 1, scale = 1, frameId?: string): { png: Buffer; width: number; height: number; map: TerrainMap } {
+export function renderTerrainPreview(document: PixelDocument, terrain = 1, scale = 1, frameId?: string, background?: string): { png: Buffer; width: number; height: number; map: TerrainMap } {
   if (!document.tileset) throw new AppError('NO_TILESET', 'This asset has no tile grid.');
   if (!Number.isInteger(terrain) || terrain < 1 || terrain > document.tileset.terrains.length) throw new AppError('UNKNOWN_TERRAIN', 'This terrain does not exist.');
   const map = terrainMap(document.tileset, terrain);
   const image = renderTerrainMap(map, document.tileset, readIndices(document, undefined, frameId), document.palette, document.width);
+  fillTransparent(image.rgba, background);
   return { png: encode(image.width, image.height, image.rgba, scale), width: image.width * scale, height: image.height * scale, map };
 }

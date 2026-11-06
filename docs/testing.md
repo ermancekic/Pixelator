@@ -47,6 +47,10 @@ The automated checks run with `npm run typecheck`, `npm test` and `npm run build
 | Tileset export | PNG with extrude/spacing; animated tiles as row blocks; Tiled TSX/TSJ with class, name, collision, animation and Wang set; Godot `.tres` with terrain mode, peering bits, physics, custom data and animation; Unity manifest. Godot loads the TileSet, and its terrain brush picks the same tiles as the test map; a Tiled parser reads TSX and TSJ identically. |
 | Project overview | `GET /api/projects/overview` returns the asset count, last change and up to four most recently changed assets per project. The window sorts by activity, marks the open project, searches, switches by click, arrow keys and `Enter`, closes with `Esc` and stays free of horizontal scrolling on mobile. |
 | Preview and tiling | “Fit” shows the whole image, with large images scaled down; 1×/2×/4×/8× show fixed pixel sizes, large images scroll. Background switching and 3×3 repetition change no document data. An in-progress stroke and a historical revision are displayed correctly. |
+| Inspection background | `inspect_asset` with `background` fills only transparent pixels of frames, sheets and tile previews; onion tints stay visible; the gutter color avoids palette and background. Without `background`, transparency stays real. |
+| Color budget | The `palette` operation's `maxColors` raises or lowers the budget within 1..32; the palette must fit; locked palettes and partial scopes are rejected; pixels stay unchanged. |
+| Agent import and metadata | `import_png` reads an absolute `.png` path or base64 and cuts sheets like the editor import; unclear or missing sources are rejected. `update_asset` and `PATCH /api/assets/:id` rename and retag without a revision. `list_runs` lists runs newest first with filters. |
+| Export folder and Unity scale | `outputDir` writes stable names (`fileName`, or the asset name plus tag) and overwrites the previous export; descriptors reference the image under that name. `unity` writes its PNG or sheet at 1×. `pixelsPerUnit` reaches sprite and tileset manifests over MCP and REST. |
 
 ## Real MCP run-through
 
