@@ -10,6 +10,7 @@ import { Store, AppError } from './store.js';
 import { createMcpServer, publicError } from './mcp.js';
 import { STYLE_PRESETS } from './engine.js';
 import { documentFromPng, framesFor, renderGif, renderPng, renderSheet, renderThumbnail, sheetLayout, sheetManifest, unityManifest, unitySheetManifest } from './images.js';
+import { renderContactSheet } from './inspect.js';
 import { writePalette } from './palette-formats.js';
 import { godotTileset, renderTilesetImage, tiledTileset, tiledTilesetXml, tilesetLayout, unityTilesetManifest } from './tileset-export.js';
 import * as schema from './contracts.js';
@@ -141,6 +142,14 @@ export async function createApp(options: { databasePath?: string; dataDir?: stri
     if (query.format === 'unity' && document.tileset) return reply.type('application/json').send(unityTilesetManifest(asset.id, revision.id, asset.name, document, tileImage, tiles(), query.pixelsPerUnit));
     if (query.format === 'unity') return reply.type('application/json').send(document.frames.length > 1 ? unitySheetManifest(asset.id, revision.id, asset.name, document, { image: `${name}.sheet.png`, layout: sheetLayout(document, { frameIds: framesFor(document, query.tag), columns: query.columns }) }, query.pixelsPerUnit) : unityManifest(asset.id, revision.id, asset.name, document, query.pixelsPerUnit));
     return reply.type('application/json').send(store.exportAsset(asset.id));
+  });
+  // All assets of a project side by side, e.g. to compare two benchmark runs by eye.
+  app.get<{ Params: { id: string } }>('/api/projects/:id/contact-sheet', (request, reply) => {
+    const query = z.object({ scale: z.coerce.number().int().min(1).max(32).optional(), background: z.union([z.literal('checker'), z.string().regex(/^#[0-9a-fA-F]{6}$/)]).optional(), q: z.string().max(300).optional(), type: schema.assetType.optional() }).strict().parse(request.query);
+    const documents = store.listAssets(request.params.id, query.q, query.type).slice(0, 64).reverse().map(asset => store.getAsset(asset.id).revision.document);
+    if (!documents.length) throw new AppError('ASSET_REQUIRED', 'No asset matches.');
+    const scale = query.scale ?? Math.max(1, Math.min(8, Math.floor(160 / Math.max(...documents.map(document => Math.max(document.width, document.height))))));
+    return reply.type('image/png').header('Cache-Control', 'no-cache').send(renderContactSheet(documents, { scale, background: query.background }).png);
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/export', (request, reply) => reply.type('application/json').header('Content-Disposition', 'attachment; filename="project.pixelator.json"').send(store.exportProject(request.params.id)));
   // shortcut: project imports are capped at 128 MiB; use a streaming container for larger histories.

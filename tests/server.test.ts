@@ -1,14 +1,20 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { PNG } from 'pngjs';
 import { createApp } from '../src/server.js';
 import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, McpStatus, Project } from '../src/types.js';
 import { cel } from './helpers.js';
 
 const apps = new Set<FastifyInstance>();
+// export_asset writes files; they go to a throwaway folder instead of the developer's data/exports.
+const dataDir = mkdtempSync(join(tmpdir(), 'pixelator-server-'));
+afterAll(() => {
+  if (dirname(dataDir) !== resolve(tmpdir()) || !basename(dataDir).startsWith('pixelator-server-')) throw new Error('Unexpected temporary test path');
+  rmSync(dataDir, { recursive: true, force: true });
+});
 const mcpHeaders = {
   accept: 'application/json, text/event-stream',
   'content-type': 'application/json',
@@ -20,7 +26,7 @@ interface ToolResult {
   structuredContent?: Record<string, unknown>;
 }
 async function open() {
-  const { app } = await createApp({ databasePath: ':memory:', logger: false });
+  const { app } = await createApp({ databasePath: ':memory:', dataDir, logger: false });
   // The MCP transport (@hono/node-server) drains a request body Fastify already consumed and, 500 ms later, calls
   // net.Socket#destroySoon. light-my-request's mock socket lacks it, so long tests crashed; real sockets are unaffected.
   app.addHook('onRequest', async request => { const socket = request.raw.socket as { destroySoon?: () => void }; socket.destroySoon ??= () => undefined; });
@@ -232,7 +238,7 @@ describe('local REST editing', () => {
   });
 
   it('restores an exported project larger than 16 MiB while keeping the ordinary request limit', async () => {
-    const { app, store } = await createApp({ databasePath: ':memory:', logger: false });
+    const { app, store } = await createApp({ databasePath: ':memory:', dataDir, logger: false });
     apps.add(app);
     const project = store.createProject({ name: 'Layered project history' });
     let detail: AssetDetail = store.createAsset({
@@ -579,7 +585,7 @@ describe('MCP transport', () => {
     } });
     expect(drawn.isError, JSON.stringify(drawn.content)).not.toBe(true);
     const composite = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, rect: { x: 0, y: 2, width: 4, height: 2 } } });
-    expect(composite.structuredContent).toMatchObject({ source: 'composite', x: 0, y: 2, width: 4, height: 2, rows: ['.121', '..4.'], legend: { '.': 'transparent', 1: '#0F380F' } });
+    expect(composite.structuredContent).toMatchObject({ source: 'composite', x: 0, y: 2, width: 4, height: 2, rows: ['.121', '..4.'], legend: { '.': 'transparent', 1: '#0F380F darkest' } });
     const layer = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: detail.asset.id, layerId: 'body' } });
     expect(layer.structuredContent!.rows).toEqual(['........', '........', '.121....', '..3.....', '........', '........', '........', '........']);
     const copy = (await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Copy', type: 'item', width: 8, height: 8 } })).structuredContent as unknown as AssetDetail;
@@ -1004,5 +1010,141 @@ describe('agent asset pipeline over MCP', () => {
       expect((await error('export_asset', { assetId: detail.asset.id, outputDir: 'relative/folder' })).code).toBe('INVALID_PATH');
       expect(await invalidInput(app, 'export_asset', { assetId: detail.asset.id, outputDir: target, fileName: '../escape' })).toContain('fileName');
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('agent aids over MCP', () => {
+  const tools = (app: FastifyInstance) => async (name: string, args: Record<string, unknown>) => {
+    const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+    expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+    return result;
+  };
+  const failure = async (app: FastifyInstance, name: string, args: Record<string, unknown>) => {
+    const result = await rpc<ToolResult>(app, 'tools/call', { name, arguments: args });
+    expect(result.isError).toBe(true);
+    return JSON.parse(result.content[0].text!).error as { code: string; message: string; operationIndex?: number };
+  };
+  const image = (result: ToolResult, index = 0) => PNG.sync.read(Buffer.from(result.content.filter(content => content.type === 'image')[index].data!, 'base64'));
+
+  it('zooms into a region with rulers, shows shape and brightness, and records only full views', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const call = tools(app);
+    const run = (await call('start_run', { projectId: project.id, assetId: detail.asset.id, prompt: 'Check details', quality: 'polished' })).structuredContent!;
+    expect(run).toMatchObject({ quality: 'polished', budget: { quality: 'polished', reviews: { used: 0, max: 8 }, batches: { used: 0, max: 400 }, targetMinutes: null } });
+    const drawn = (await call('apply_operations', { assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'detail', runId: run.id, editScope: { layerIds: ['body'] }, operations: [{ op: 'rows', layerId: 'body', x: 2, y: 2, rows: ['12', '34'] }] })).structuredContent!;
+
+    const zoom = await call('inspect_asset', { assetId: detail.asset.id, runId: run.id, rect: { x: 2, y: 2, width: 4, height: 2 }, scales: [8], grid: 2, background: '#102030' });
+    expect(zoom.structuredContent).toMatchObject({
+      imageWidth: 46, imageHeight: 32, images: [{ scale: 8, width: 46, height: 32, margin: { left: 14, top: 16 } }],
+      view: { layout: 'frame', rect: { x: 2, y: 2, width: 4, height: 2 }, background: '#102030', grid: { spacing: 2, color: '#00FFFF', originX: 2, originY: 2 } },
+      inspection: { recorded: false },
+    });
+    const png = image(zoom);
+    expect([[...png.data.subarray((20 * 46 + 18) * 4, (20 * 46 + 18) * 4 + 4)], [...png.data.subarray((20 * 46 + 42) * 4, (20 * 46 + 42) * 4 + 4)]]).toEqual([[15, 56, 15, 255], [16, 32, 48, 255]]);
+    const review = { runId: run.id, revisionId: drawn.revisionId, observations: 'Only a detail was seen.', issues: [] };
+    expect(await failure(app, 'record_review', review)).toMatchObject({ code: 'INSPECTION_REQUIRED' });
+
+    const shape = await call('inspect_asset', { assetId: detail.asset.id, runId: run.id, mode: 'silhouette', scale: 1 });
+    expect(shape.structuredContent).toMatchObject({ view: { mode: 'silhouette' }, inspection: { recorded: false } });
+    expect([...image(shape).data.subarray((2 * 8 + 2) * 4, (2 * 8 + 2) * 4 + 8)]).toEqual([0, 0, 0, 255, 0, 0, 0, 255]);
+    const body = await call('inspect_asset', { assetId: detail.asset.id, layerIds: ['sword'], scale: 1 });
+    expect(image(body).data.every(value => value === 0)).toBe(true);
+    const full = await call('inspect_asset', { assetId: detail.asset.id, runId: run.id, scales: [1, 8], grid: 4, background: 'checker' });
+    expect(full.structuredContent).toMatchObject({ inspection: { recorded: true, inspectedFrameIds: ['frame-1'], missingFrameIds: [] } });
+    expect((await call('record_review', { ...review, observations: 'The four pixels sit at (2,2); checked with rulers.', reviewer: 'independent' })).structuredContent).toMatchObject({ reviews: [{ reviewer: 'independent' }] });
+    expect((await call('get_run', { runId: run.id })).structuredContent).toMatchObject({ budget: { reviews: { used: 1, max: 8 }, batches: { used: 1, max: 400 } } });
+
+    expect(await failure(app, 'inspect_asset', { assetId: detail.asset.id, preview: 'wrap', grid: 2 })).toMatchObject({ code: 'INVALID_VIEW' });
+    expect(await failure(app, 'inspect_asset', { assetId: detail.asset.id, layerIds: ['cape'] })).toMatchObject({ code: 'UNKNOWN_LAYER' });
+    expect(await failure(app, 'inspect_asset', { assetId: detail.asset.id, rect: { x: 6, y: 0, width: 4, height: 2 } })).toMatchObject({ code: 'INVALID_RECT' });
+    const tile = await call('inspect_asset', { assetId: detail.asset.id, preview: 'wrap', rect: { x: 2, y: 2, width: 2, height: 2 }, scale: 1 });
+    expect(tile.structuredContent).toMatchObject({ imageWidth: 6, imageHeight: 6, view: { preview: 'wrap', rect: { x: 2, y: 2, width: 2, height: 2 } } });
+  });
+
+  it('adds up partial inspections of a long animation and warns about images a client would shrink', async () => {
+    const app = await open(); const { project } = await setup(app); const call = tools(app);
+    const frames = Array.from({ length: 12 }, (_, index) => ({ id: `f${index + 1}` }));
+    const run = (await call('start_run', { projectId: project.id, prompt: 'Wide banner animation' })).structuredContent!;
+    const created = (await call('create_asset', { projectId: project.id, runId: run.id, name: 'Banner', type: 'prop', width: 400, height: 40, frames })).structuredContent as unknown as AssetDetail;
+    const drawn = (await call('apply_operations', { assetId: created.asset.id, expectedRevision: created.revision.id, requestId: 'banner', runId: run.id, editScope: { layerIds: ['body'] }, operations: [{ op: 'rect', layerId: 'body', frameIds: 'all', x: 10, y: 10, width: 20, height: 4, color: 2 }] })).structuredContent!;
+    expect(drawn).toMatchObject({ diff: { changedPixels: 960, changedFrames: frames.map(frame => frame.id) } });
+
+    const whole = await call('inspect_asset', { assetId: created.asset.id, scale: 2 });
+    expect(whole.structuredContent).toMatchObject({ view: { layout: 'sheet', columns: 3, rows: 4 }, imageWidth: 2404 });
+    expect((whole.structuredContent!.notes as string[])[0]).toContain('2404 px');
+    const first = await call('inspect_asset', { assetId: created.asset.id, runId: run.id, frameIds: ['f1', 'f2', 'f3', 'f4', 'f5', 'f6'] });
+    expect(first.structuredContent).toMatchObject({ imageWidth: 1202, inspection: { recorded: true, missingFrameIds: ['f7', 'f8', 'f9', 'f10', 'f11', 'f12'] } });
+    expect(first.structuredContent).not.toHaveProperty('notes');
+    await call('record_review', { runId: run.id, revisionId: drawn.revisionId, observations: 'First half checked.', issues: [] });
+    expect(await failure(app, 'finish_run', { runId: run.id, status: 'completed' })).toMatchObject({ code: 'REVIEW_REQUIRED', message: expect.stringContaining('in several parts') });
+    const second = await call('inspect_asset', { assetId: created.asset.id, runId: run.id, frameIds: ['f7', 'f8', 'f9', 'f10', 'f11', 'f12'] });
+    expect(second.structuredContent).toMatchObject({ inspection: { recorded: true, inspectedFrameIds: frames.map(frame => frame.id), missingFrameIds: [] } });
+    expect((await call('finish_run', { runId: run.id, status: 'completed' })).structuredContent).toMatchObject({ status: 'completed' });
+  });
+
+  it('shows a family of assets side by side over MCP and REST', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const call = tools(app);
+    await app.inject({ method: 'POST', url: `/api/assets/${detail.asset.id}/operations`, payload: paint(detail) });
+    const tall = (await call('create_asset', { projectId: project.id, name: 'Tower', type: 'prop', width: 4, height: 16 })).structuredContent as unknown as AssetDetail;
+    const sheet = await call('inspect_assets', { assetIds: [detail.asset.id, tall.asset.id], scale: 2, background: '#204060' });
+    expect(sheet.structuredContent).toMatchObject({
+      scale: 2, imageWidth: 48, imageHeight: 64, background: '#204060',
+      assets: [{ label: 1, assetId: detail.asset.id, name: 'Knight', width: 8, height: 8, x: 8, y: 24 }, { label: 2, assetId: tall.asset.id, name: 'Tower', width: 4, height: 16, x: 32, y: 8 }],
+    });
+    const png = image(sheet);
+    expect([png.width, png.height, [...png.data.subarray(0, 4)], [...png.data.subarray((26 * 48 + 10) * 4, (26 * 48 + 10) * 4 + 4)]]).toEqual([48, 64, [32, 64, 96, 255], [15, 56, 15, 255]]);
+    const byProject = await call('inspect_assets', { projectId: project.id, type: 'prop' });
+    expect((byProject.structuredContent!.assets as { name: string }[]).map(asset => asset.name)).toEqual(['Tower']);
+    expect(await failure(app, 'inspect_assets', { assetIds: [detail.asset.id], projectId: project.id })).toMatchObject({ code: 'INVALID_INPUT' });
+    expect(await failure(app, 'inspect_assets', { projectId: project.id, q: 'nothing-matches' })).toMatchObject({ code: 'ASSET_REQUIRED' });
+
+    const rest = await app.inject(`/api/projects/${project.id}/contact-sheet?scale=2&background=%23204060`);
+    expect([rest.statusCode, rest.headers['content-type']]).toEqual([200, 'image/png']);
+    const restPng = PNG.sync.read(rest.rawPayload);
+    expect([restPng.width, restPng.height]).toEqual([48, 64]);
+    expect((await app.inject(`/api/projects/${project.id}/contact-sheet?scale=99`)).statusCode).toBe(400);
+  });
+
+  it('points to the failing operation, reuses art across assets and records agent restores', async () => {
+    const app = await open(); const { project, detail } = await setup(app); const call = tools(app);
+    const located = await failure(app, 'apply_operations', { assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'located', editScope: { layerIds: ['body'] }, operations: [
+      { op: 'rect', layerId: 'body', x: 0, y: 0, width: 2, height: 2, color: 1 },
+      { op: 'rows', layerId: 'body', x: 0, y: 4, rows: ['111', '1111'] },
+    ] });
+    expect(located).toEqual({ code: 'INVALID_ROWS', message: 'operations[1] (rows): Rows must be strings of equal length: row 1 has 4 characters, row 0 has 3.', status: 400, operationIndex: 1 });
+    const painted = (await call('apply_operations', { assetId: detail.asset.id, expectedRevision: detail.revision.id, requestId: 'named', editScope: { layerIds: ['body', 'sword'], allowLayerChanges: true }, operations: [
+      { op: 'rows', layerId: 'body', x: 1, y: 1, rows: ['12', '21'] },
+      { op: 'palette_names', names: [{ index: 1, name: 'outline' }], ramps: [{ name: 'leaf', indices: [1, 2, 3] }] },
+    ] })).structuredContent!;
+    const read = (await call('read_pixels', { assetId: detail.asset.id, rect: { x: 1, y: 1, width: 2, height: 2 } })).structuredContent!;
+    expect(read).toMatchObject({ rows: ['12', '21'], legend: { 1: '#0F380F outline', 2: '#306230 dark' } });
+    expect((await call('get_asset', { assetId: detail.asset.id })).structuredContent).toMatchObject({ revision: { document: { ramps: [{ name: 'leaf', indices: [1, 2, 3] }] } } });
+
+    const scene = (await call('create_asset', { projectId: project.id, name: 'Scene', type: 'prop', width: 8, height: 8 })).structuredContent as unknown as AssetDetail;
+    const reused = (await call('apply_operations', { assetId: scene.asset.id, expectedRevision: scene.revision.id, requestId: 'reuse', editScope: { layerIds: ['body'] }, operations: [{ op: 'stamp', layerId: 'body', sourceAssetId: detail.asset.id, rect: { x: 1, y: 1, width: 2, height: 2 }, dx: 4, dy: 5 }] })).structuredContent!;
+    expect(reused).toMatchObject({ diff: { changedPixels: 4, boundingBox: { x: 5, y: 6, width: 2, height: 2 } } });
+
+    const restored = (await call('restore_revision', { assetId: detail.asset.id, revisionId: detail.revision.id, expectedRevision: painted.revisionId, requestId: 'undo' })).structuredContent as unknown as AssetDetail;
+    expect(restored.revision).toMatchObject({ actor: 'agent', label: 'Restored: Asset created' });
+    // An agent cannot pose as the human: the tool schema has no actor field.
+    const spoofed = await rpc<ToolResult>(app, 'tools/call', { name: 'restore_revision', arguments: { assetId: detail.asset.id, revisionId: detail.revision.id, expectedRevision: restored.revision.id, requestId: 'spoof', actor: 'human' } });
+    expect(spoofed.isError).toBe(true);
+    expect((await app.inject(`/api/assets/${detail.asset.id}/revisions?summary=true`)).json()).toHaveLength(3);
+  });
+
+  it('describes operations in the tool schema and publishes the quality budgets', async () => {
+    const app = await open();
+    const listing = await rpc<{ tools: { name: string; description: string; inputSchema: { properties: Record<string, { items?: { oneOf: { properties: { op: { const: string } }; description?: string }[] } }> } }[] }>(app, 'tools/list', {});
+    expect(listing.tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['inspect_asset', 'inspect_assets', 'apply_operations']));
+    const operations = listing.tools.find(tool => tool.name === 'apply_operations')!.inputSchema.properties.operations.items!.oneOf;
+    const described = Object.fromEntries(operations.map(operation => [operation.properties.op.const, operation.description ?? '']));
+    expect(described.ellipse).toContain('not center and radius');
+    expect(described.stamp).toContain('sourceAssetId');
+    for (const op of ['pixels', 'rows', 'fill', 'move', 'copy', 'outline', 'palette', 'palette_names', 'autotile']) expect(described[op].length, op).toBeGreaterThan(20);
+    const workflow = await rpc<ToolResult>(app, 'tools/call', { name: 'get_workflow', arguments: {} });
+    expect(workflow.structuredContent).toMatchObject({ limits: { runQuality: { draft: { reviews: 2 }, standard: { reviews: 4, batches: 120 }, polished: { reviews: 8, batches: 400, targetMinutes: null } }, inspectImageEdge: 1568 } });
+    const presets = workflow.structuredContent!.presets as Record<string, { palette: string[]; paletteNames: string[]; ramps: unknown[] }>;
+    expect(presets['16-bit'].palette).toHaveLength(33);
+    expect(presets['16-bit'].paletteNames).toHaveLength(33);
+    expect(presets['8-bit'].ramps.length).toBeGreaterThan(0);
   });
 });

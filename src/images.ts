@@ -62,20 +62,20 @@ function fillTransparent(rgba: Uint8Array | Uint8ClampedArray, background?: stri
   for (let i = 0; i < rgba.length; i += 4) if (!rgba[i + 3]) rgba.set(color, i);
 }
 
-/** Renders frames side by side; gutters and onion tints are inspection aids, not asset pixels. */
-export function renderSheet(document: PixelDocument, options: SheetOptions = {}): { png: Buffer; layout: SheetLayout } {
-  const scale = options.scale ?? 1; validScale(scale);
-  const layout = sheetLayout(document, options);
-  const png = new PNG({ width: layout.width * scale, height: layout.height * scale });
+/** Frames side by side at native size. transform changes a frame's pixels before onion tints; gutters and tints are inspection aids, not asset pixels. */
+export function sheetRaster(document: PixelDocument, options: SheetOptions = {}, transform?: (rgba: Uint8Array) => void): { rgba: Uint8Array; width: number; height: number; layout: SheetLayout } {
+  const layout = sheetLayout(document, options); const { width, height } = layout;
+  const out = new Uint8Array(width * height * 4);
   if (layout.gutterColor) {
     const color = rgb(layout.gutterColor);
-    for (let i = 0; i < png.data.length; i += 4) png.data.set(color, i);
-    for (const cell of layout.cells) for (let y = cell.y * scale; y < (cell.y + cell.height) * scale; y++) png.data.fill(0, (y * png.width + cell.x * scale) * 4, (y * png.width + (cell.x + cell.width) * scale) * 4);
+    for (let i = 0; i < out.length; i += 4) out.set(color, i);
+    for (const cell of layout.cells) for (let y = cell.y; y < cell.y + cell.height; y++) out.fill(0, (y * width + cell.x) * 4, (y * width + cell.x + cell.width) * 4);
   }
   const before = Math.min(3, options.onion?.before ?? 0); const after = Math.min(3, options.onion?.after ?? 0);
   for (const cell of layout.cells) {
     const index = document.frames.findIndex(frame => frame.id === cell.frameId);
     const rgba = composite(document, cell.frameId);
+    transform?.(rgba);
     if (before || after) {
       const ghosts: { frame: number; color: string }[] = [];
       // Nearer frames are drawn last; at equal distance the previous frame wins because the inspected pose continues from it.
@@ -90,9 +90,16 @@ export function renderSheet(document: PixelDocument, options: SheetOptions = {})
       }
     }
     fillTransparent(rgba, options.background);
-    blit(png, rgba, document.width, document.height, scale, cell.x * scale, cell.y * scale);
+    for (let y = 0; y < document.height; y++) out.set(rgba.subarray(y * document.width * 4, (y + 1) * document.width * 4), ((cell.y + y) * width + cell.x) * 4);
   }
-  return { png: PNG.sync.write(png), layout };
+  return { rgba: out, width, height, layout };
+}
+
+/** Renders frames side by side, enlarged by nearest neighbor. */
+export function renderSheet(document: PixelDocument, options: SheetOptions = {}): { png: Buffer; layout: SheetLayout } {
+  const scale = options.scale ?? 1; validScale(scale);
+  const { rgba, width, height, layout } = sheetRaster(document, options);
+  return { png: encodePng(width, height, rgba, scale), layout };
 }
 
 /** Animated GIF of all frames or one tag, honoring the tag's direction and loop flag; index 0 stays transparent. */
@@ -162,7 +169,7 @@ export function importPng(source: string | Buffer, maxColors: number, paletteLoc
     pixels[i / 4] = index;
   }
   if (palette.length === 1) palette.push('#000000');
-  const document = createDocument({ width, height, palette, maxColors, paletteLocked, layers: [{ id: 'import', name: 'PNG (unsegmentiert)' }] });
+  const document = createDocument({ width, height, palette, maxColors, paletteLocked, layers: [{ id: 'import', name: 'PNG (unsegmented)' }] });
   document.frames[0].cels.import = pixels;
   return document;
 }
@@ -231,12 +238,14 @@ export function unitySheetManifest(assetId: string, revisionId: string, name: st
   };
 }
 
-const encode = (width: number, height: number, rgba: Uint8Array | Uint8ClampedArray, scale: number): Buffer => {
+/** An RGBA raster as PNG, enlarged by nearest neighbor. */
+export function encodePng(width: number, height: number, rgba: Uint8Array | Uint8ClampedArray, scale = 1): Buffer {
   validScale(scale);
   const png = new PNG({ width: width * scale, height: height * scale });
   blit(png, rgba instanceof Uint8Array ? rgba : new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength), width, height, scale);
   return PNG.sync.write(png);
-};
+}
+const encode = encodePng;
 
 /** The frame repeated 3×3 so seams at the canvas edges become visible. */
 export function renderWrapPreview(document: PixelDocument, scale = 1, frameId?: string, background?: string): { png: Buffer; width: number; height: number } {

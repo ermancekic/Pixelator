@@ -2,6 +2,28 @@
 
 The first version is implemented locally and runs on a shared raster engine for the browser and MCP. This verification covers the state as of 17 October 2026; it is not a general guarantee for every subject or agent model.
 
+## Addendum: Aids for better agent-drawn assets
+
+On 9 November 2026, on top of the 6 November changes below, **268 tests in 17 files**, the TypeScript check and the production build passed. Newly tested: batch errors that name the failing operation; drawing on several frames; `stamp` from another asset; palette role names and ramps; detail views, silhouette, brightness, backgrounds, coordinate rulers and contact sheets; inspections that add up per revision; run quality budgets; packed revision storage and its compaction.
+
+**Through the MCP endpoint** (in-memory server, calls as an agent sends them): a 16×16 slime was drawn on two frames with one `rows` operation and `frameIds: "all"`; a batch with a short row was rejected as `operations[1] (rows): … row 1 has 2 characters, row 0 has 3`; the slime was inspected with rulers at 16× on a flat background, zoomed to a 10×6 region, as silhouette and as brightness on a checkerboard; two partial inspections were reported as complete, a detail view as not recorded; a potion was stamped into a scene with a smaller palette (exact match refused with the seven missing colors, `nearest` accepted); `inspect_assets` returned the three assets numbered in one image. The images were viewed: ruler labels and grid lines are legible at 8× and 16×.
+
+**Storage:** `npm run compact` was run on a copy of the database behind the README banners: 26 revisions, 579 MB before and 3.3 MB after, in 1.5 seconds. All 26 revisions were identical to the originals afterwards; the 48-frame header loaded in 0.2 seconds. The original database was not changed.
+
+**Fixed context for agents** (characters, including the text and `structuredContent` copy where a tool returns both): `tools/list` is now 58,373 and `get_workflow` 57,802; the October measurement below had 32,318 and 32,732. The growth comes from the new tools and options of both November changes, a description for every operation, the recipes and worked examples of the Artist Guide, the longer skill and the named preset palettes.
+
+**Artist Guide 2026-11-09.1:** the three worked examples (slime, potion, hero) and the squash frame were drawn with the engine and viewed at 8× and 16× before they went into the guide. The recipes are Pixelator's own defaults, not quotations from the cited sources.
+
+**Background:** `inspect_asset` keeps the #RRGGBB `background` of the 6 November change, including tile previews and a gutter color that avoids it, and adds `"checker"` for frame and sheet views.
+
+**Perspective:** the built editor bundle contains the three new options, and the style update the editor sends was accepted with `three-quarter` by a separate service on port 4399 with its own data folder.
+
+**Test hygiene:** the server tests wrote their exports into `data/exports`; they now use a temporary folder.
+
+**Not verified:** a real Codex or Claude task that uses the new tools; whether they raise the quality of the [23-task sample](testing.md) (the [comparison procedure](benchmark.md) is new and has not been run); the new perspective options by clicking in a browser; how a given client scales the returned images.
+
+The “Pending acceptance” section at the end predates the [examples](examples.md) that Claude agents drew over MCP. A recorded run-through of the acceptance steps and of the 23-task sample with Claude is still open.
+
 ## Addendum: Agent workflow gaps
 
 On 6 November 2026, **238 tests in 16 files**, the TypeScript check and the production build passed. Newly tested: the inspection `background` for frames, sheets and tile previews; `maxColors` on the `palette` operation; the MCP tools `import_png`, `update_asset` and `list_runs` plus `PATCH /api/assets/:id`; `export_asset` with `outputDir`, `fileName` and `pixelsPerUnit`, with Unity exports now including their texture.

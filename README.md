@@ -34,6 +34,8 @@ Local pixel art editor with MCP for Codex, Claude and Antigravity. Requires Node
 - PNG, sprite sheet and project import
 - Export window with live preview: PNG, sprite sheet with Aseprite JSON, GIF, tileset, Unity, palette and project file; images 1–16×
 - MCP runs, image inspection, compact raster input/output and agent status
+- Inspection aids for agents: region zoom, coordinate grid, silhouette, brightness view and contact sheets
+- Run quality levels, named palette colors with shading ramps and reuse of art across assets
 
 ## Generated examples
 
@@ -69,9 +71,9 @@ claude mcp add --transport http pixelator http://127.0.0.1:4317/mcp --scope user
 { "mcpServers": { "pixelator": { "serverUrl": "http://127.0.0.1:4317/mcp" } } }
 ```
 
-Then reload the MCP connection in the client. [More details](docs/mcp.md) · [Editor](docs/editor.md) · [Tiles](docs/tiles.md) · [Tests](docs/testing.md)
+Then reload the MCP connection in the client. [More details](docs/mcp.md) · [Editor](docs/editor.md) · [Tiles](docs/tiles.md) · [Tests](docs/testing.md) · [Quality comparison](docs/benchmark.md)
 
-Data lives in `data/`. For backups, stop the app and copy the folder.
+Data lives in `data/`. For backups, stop the app and copy the folder. [Storage](docs/storage.md)
 
 [MIT License](LICENSE)
 

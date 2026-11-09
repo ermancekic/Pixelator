@@ -12,7 +12,8 @@
     "start": "tsx src/server.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "mcp:stdio": "tsx src/stdio.ts"
+    "mcp:stdio": "tsx src/stdio.ts",
+    "compact": "tsx src/compact.ts"
   },
   "dependencies": {
     "@fastify/static": "^8.3.0",

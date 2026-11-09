@@ -1,8 +1,9 @@
+import { AppError } from './errors.js';
 import { rowIndex } from './raster-text.js';
 import { activeSlots, autotileLayout, CENTER, composeTile, MAX_TERRAINS, MAX_TILE_TEXT, missingCombinations, TEMPLATE_COLUMNS, TEMPLATE_MODE, templateRows, TERRAIN_COLORS, TERRAIN_SLOTS, tileGrid, wangOf } from './tiles.js';
 import type { KeyTile } from './tiles.js';
 import type {
-  AnimationTag, AnimationTagInput, EditScope, FrameReport, FrameView, Issue, LegacyPixelDocument, Operation, PixelDiff,
+  AnimationTag, AnimationTagInput, ColorRamp, EditScope, FrameReport, FrameView, Issue, LegacyPixelDocument, Operation, PixelDiff,
   PixelDocument, PixelFrame, PixelLayer, PixelStyle, ProjectStyle, Rect, TerrainMode, TileInfo, Tileset, ValidationReport,
 } from './types.js';
 
@@ -12,19 +13,42 @@ export const DEFAULT_PALETTE = [
   '#6DC2CA', '#DAD45E', '#DEEED6',
 ];
 
-function preset(preset: PixelStyle, palette: string[]): ProjectStyle {
+/** DawnBringer 32, the larger sibling of the 16-color default. */
+export const PALETTE_32 = [
+  '#00000000', '#000000', '#222034', '#45283C', '#663931', '#8F563B', '#DF7126', '#D9A066', '#EEC39A', '#FBF236', '#99E550',
+  '#6ABE30', '#37946E', '#4B692F', '#524B24', '#323C39', '#3F3F74', '#306082', '#5B6EE1', '#639BFF', '#5FCDE4', '#CBDBFC',
+  '#FFFFFF', '#9BADB7', '#847E87', '#696A6A', '#595652', '#76428A', '#AC3232', '#D95763', '#D77BBA', '#8F974A', '#8A6F30',
+];
+
+function preset(preset: PixelStyle, palette: string[], names: string[], ramps: ColorRamp[]): ProjectStyle {
   return {
     preset, palette, maxColors: palette.length - 1, paletteLocked: false,
     width: 32, height: 32, perspective: 'side', lighting: 'upper-left',
     outline: 'single-pixel', theme: 'neutral',
+    paletteNames: ['', ...names], ramps,
   };
 }
 
+// Names and ramps are starting points for shading; projects can rename colors and define their own ramps.
+const NAMES_16 = ['black', 'maroon', 'navy', 'dark gray', 'brown', 'dark green', 'red', 'gray', 'blue', 'orange', 'light gray', 'green', 'peach', 'cyan', 'yellow', 'white'];
+const RAMPS_16: ColorRamp[] = [
+  { name: 'warm', indices: [2, 5, 10, 13, 16] }, { name: 'foliage', indices: [1, 6, 12, 15] }, { name: 'water', indices: [3, 9, 14, 16] },
+  { name: 'stone', indices: [1, 4, 8, 11, 16] }, { name: 'fire', indices: [7, 10, 15] },
+];
+const NAMES_32 = [
+  'black', 'night', 'dark plum', 'dark brown', 'brown', 'orange', 'tan', 'peach', 'yellow', 'lime', 'green', 'teal', 'dark green', 'dark olive', 'dark slate', 'indigo',
+  'steel blue', 'blue', 'sky blue', 'cyan', 'pale blue', 'white', 'light gray', 'gray', 'dark gray', 'charcoal', 'purple', 'red', 'rose', 'pink', 'olive', 'ochre',
+];
+const RAMPS_32: ColorRamp[] = [
+  { name: 'skin and wood', indices: [3, 4, 5, 7, 8] }, { name: 'foliage', indices: [15, 13, 11, 10] }, { name: 'water', indices: [2, 16, 18, 19, 20, 21] },
+  { name: 'stone', indices: [1, 26, 25, 24, 23, 22] }, { name: 'fire', indices: [28, 6, 9] }, { name: 'gold', indices: [14, 32, 7, 9] }, { name: 'magic', indices: [3, 27, 30] },
+];
+
 export const STYLE_PRESETS: Record<PixelStyle, ProjectStyle> = {
-  '1-bit': preset('1-bit', ['#00000000', '#171820', '#F4F4DC']),
-  'game-boy': preset('game-boy', ['#00000000', '#0F380F', '#306230', '#8BAC0F', '#9BBC0F']),
-  '8-bit': preset('8-bit', [...DEFAULT_PALETTE]),
-  '16-bit': preset('16-bit', [...DEFAULT_PALETTE]),
+  '1-bit': preset('1-bit', ['#00000000', '#171820', '#F4F4DC'], ['dark', 'light'], []),
+  'game-boy': preset('game-boy', ['#00000000', '#0F380F', '#306230', '#8BAC0F', '#9BBC0F'], ['darkest', 'dark', 'light', 'lightest'], [{ name: 'green', indices: [1, 2, 3, 4] }]),
+  '8-bit': preset('8-bit', [...DEFAULT_PALETTE], NAMES_16, RAMPS_16),
+  '16-bit': preset('16-bit', [...PALETTE_32], NAMES_32, RAMPS_32),
 };
 
 export const MAX_LAYERS = 32;
@@ -55,6 +79,29 @@ function paletteIssues(palette: unknown, maxColors: number): Issue[] {
   if (Array.from(palette.slice(1)).some(color => typeof color !== 'string' || !/^#[0-9a-f]{6}$/i.test(color))) return issue('Opaque palette colors must be #RRGGBB.');
   if (new Set(palette.map(color => color.toUpperCase())).size !== palette.length) return issue('Palette colors must be unique.');
   return [];
+}
+
+export const MAX_COLOR_NAME = 40;
+export const MAX_RAMPS = 16;
+/** Role names run parallel to the palette; ramps list existing opaque indices from dark to light. */
+function paletteInfoIssues(names: unknown, ramps: unknown, paletteLength: number): Issue[] {
+  const issue = (message: string): Issue[] => [{ code: 'INVALID_PALETTE_NAMES', severity: 'error', message }];
+  if (names !== undefined && (!Array.isArray(names) || names.length !== paletteLength || names.some(item => typeof item !== 'string' || item.length > MAX_COLOR_NAME))) return issue(`paletteNames needs one text of at most ${MAX_COLOR_NAME} characters per palette entry ("" for unnamed).`);
+  if (ramps === undefined) return [];
+  if (!Array.isArray(ramps) || ramps.length > MAX_RAMPS) return issue(`ramps must be a list of at most ${MAX_RAMPS} entries.`);
+  const seen = new Set<string>();
+  for (const ramp of ramps) {
+    if (!object(ramp) || typeof ramp.name !== 'string' || !ramp.name.trim() || ramp.name.length > MAX_COLOR_NAME || seen.has(ramp.name)) return issue('Each ramp needs a unique name.');
+    seen.add(ramp.name);
+    if (!Array.isArray(ramp.indices) || ramp.indices.length < 2 || ramp.indices.length > 16 || new Set(ramp.indices).size !== ramp.indices.length || !ramp.indices.every(index => integer(index) && index >= 1 && index < paletteLength)) return issue(`Ramp ${ramp.name} needs 2..16 different opaque palette indices below ${paletteLength}.`);
+  }
+  return [];
+}
+/** Names and ramps that still fit a palette of the given length; undefined when nothing is left. */
+function fitPaletteInfo(names: string[] | undefined, ramps: ColorRamp[] | undefined, paletteLength: number): { paletteNames?: string[]; ramps?: ColorRamp[] } {
+  const fitted = names && Array.from({ length: paletteLength }, (_, index) => index ? names[index] ?? '' : '');
+  const kept = ramps?.map(ramp => ({ name: ramp.name, indices: ramp.indices.filter(index => index < paletteLength) })).filter(ramp => ramp.indices.length >= 2);
+  return { ...(fitted?.some(Boolean) ? { paletteNames: fitted } : {}), ...(kept?.length ? { ramps: kept } : {}) };
 }
 
 function tagIssues(tags: unknown, frameCount: number): Issue[] {
@@ -166,6 +213,7 @@ function validateStructure(doc: PixelDocument): ValidationReport {
   if (!integer(doc.width) || doc.width < 1 || !integer(doc.height) || doc.height < 1 || !integer(doc.width * doc.height)) error('INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
   if (!integer(doc.maxColors) || doc.maxColors < 1 || doc.maxColors > 32) error('INVALID_COLOR_LIMIT', 'maxColors must be an integer in 1..32.');
   issues.push(...paletteIssues(doc.palette, integer(doc.maxColors) ? doc.maxColors : 32));
+  if (Array.isArray(doc.palette)) issues.push(...paletteInfoIssues(doc.paletteNames, doc.ramps, doc.palette.length));
   if (typeof doc.paletteLocked !== 'boolean') error('INVALID_DOCUMENT', 'paletteLocked must be boolean.');
   if (!object(doc.pivot) || typeof doc.pivot.x !== 'number' || !Number.isFinite(doc.pivot.x) || doc.pivot.x < 0 || doc.pivot.x > doc.width || typeof doc.pivot.y !== 'number' || !Number.isFinite(doc.pivot.y) || doc.pivot.y < 0 || doc.pivot.y > doc.height) error('INVALID_PIVOT', 'Pivot must use pixel coordinates inside the canvas edges.');
   if (!Array.isArray(doc.layers) || doc.layers.length < 1 || doc.layers.length > MAX_LAYERS) {
@@ -271,6 +319,7 @@ export function upgradeDocument(doc: PixelDocument | LegacyPixelDocument): Pixel
 
 export function createDocument(input: {
   width: number; height: number; palette?: string[]; maxColors?: number; paletteLocked?: boolean;
+  paletteNames?: string[]; ramps?: ColorRamp[];
   layers?: { id: string; name: string }[]; pivot?: { x: number; y: number };
   frames?: { id: string; durationMs?: number }[]; tags?: AnimationTagInput[]; tileSize?: { width: number; height: number };
 }): PixelDocument {
@@ -290,6 +339,9 @@ export function createDocument(input: {
   const doc: PixelDocument = {
     schemaVersion: 2, width: input.width, height: input.height,
     palette: [...palette], maxColors: input.maxColors ?? palette.length - 1, paletteLocked: input.paletteLocked ?? false,
+    // A shorter name list is padded, so a caller may name only the first colors.
+    ...(input.paletteNames?.some(Boolean) ? { paletteNames: input.paletteNames.length < palette.length ? palette.map((_, index) => input.paletteNames![index] ?? '') : [...input.paletteNames] } : {}),
+    ...(input.ramps?.length ? { ramps: input.ramps.map(ramp => ({ name: ramp.name, indices: [...ramp.indices] })) } : {}),
     layers: layerOptions.map(layer => ({ id: layer.id, name: layer.name, visible: true, locked: false })),
     frames: frameOptions.map(frame => ({ id: frame.id, durationMs: frame.durationMs ?? DEFAULT_FRAME_MS, cels: Object.fromEntries(layerOptions.map(layer => [layer.id, new Array(cells).fill(0)])) })),
     tags: tags.map(normalizeTag),
@@ -332,17 +384,31 @@ type AppliedOperations = {
 };
 type Raster = { pixels: number[]; frame: PixelFrame };
 
-export function applyOperations(original: PixelDocument, operations: Operation[], editScope: EditScope): AppliedOperations {
-  return editDocument(original, operations, editScope, false);
+/** What an edit may read beyond its own document: other assets, for a stamp with sourceAssetId. */
+export interface EditContext { resolveAsset?: (assetId: string) => PixelDocument }
+
+export function applyOperations(original: PixelDocument, operations: Operation[], editScope: EditScope, context: EditContext = {}): AppliedOperations {
+  return editDocument(original, operations, editScope, false, context);
 }
 
 export function previewOperations(original: PixelDocument, operations: Operation[], editScope: EditScope): PixelDocument {
   return editDocument(original, operations, editScope, true);
 }
 
-function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: true): PixelDocument;
-function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: false): AppliedOperations;
-function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: boolean): PixelDocument | AppliedOperations {
+const DRAWING_OPS = new Set(['pixels', 'patch', 'rows', 'line', 'rect', 'ellipse', 'polygon', 'fill', 'move', 'copy', 'flip', 'rotate', 'replace', 'outline', 'shift', 'autotile', 'stamp']);
+
+/** Names the failing operation, so an agent can fix one entry of a rejected batch instead of guessing. */
+function locate(error: unknown, index: number, op: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  const where = `operations[${index}]${typeof op === 'string' ? ` (${op})` : ''}`;
+  const match = error instanceof AppError ? null : /^([A-Z_]+): ([\s\S]*)$/.exec(error.message);
+  error.message = match ? `${match[1]}: ${where}: ${match[2]}` : `${where}: ${error.message}`;
+  return Object.assign(error, { operationIndex: index });
+}
+
+function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: true, context?: EditContext): PixelDocument;
+function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: false, context?: EditContext): AppliedOperations;
+function editDocument(original: PixelDocument, operations: Operation[], editScope: EditScope, preview: boolean, context: EditContext = {}): PixelDocument | AppliedOperations {
   assertDocument(original);
   requireValue(Array.isArray(operations) && operations.length >= 1 && operations.length <= MAX_OPERATIONS, 'INVALID_BATCH', `A batch must contain 1..${MAX_OPERATIONS} operations.`);
   requireValue(object(editScope) && Array.isArray(editScope.layerIds) && editScope.layerIds.length > 0 && editScope.layerIds.length <= MAX_LAYERS && Array.from(editScope.layerIds).every(identifier) && new Set(editScope.layerIds).size === editScope.layerIds.length, 'INVALID_SCOPE', 'Scope must contain unique layer IDs.');
@@ -352,6 +418,8 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
   requireValue(editScope.allowFrameChanges === undefined || typeof editScope.allowFrameChanges === 'boolean', 'INVALID_SCOPE', 'allowFrameChanges must be boolean.');
   const doc: PixelDocument = {
     ...original, palette: [...original.palette], pivot: { ...original.pivot },
+    ...(original.paletteNames ? { paletteNames: [...original.paletteNames] } : {}),
+    ...(original.ramps ? { ramps: original.ramps.map(ramp => ({ name: ramp.name, indices: [...ramp.indices] })) } : {}),
     layers: original.layers.map(layer => ({ ...layer })),
     frames: original.frames.map(frame => ({ ...frame, cels: Object.fromEntries(Object.entries(frame.cels).map(([id, pixels]) => [id, pixels.slice()])) })),
     tags: original.tags.map(tag => ({ ...tag })),
@@ -360,8 +428,9 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
   // resize_canvas replaces both for the rest of the batch.
   let cells = doc.width * doc.height;
   let canvas: Rect = { x: 0, y: 0, width: doc.width, height: doc.height };
-  const rect = (value: unknown): Rect => {
-    requireValue(object(value) && integer(value.x) && integer(value.y) && integer(value.width) && integer(value.height) && value.width >= 1 && value.height >= 1 && value.x >= 0 && value.y >= 0 && value.x + value.width <= doc.width && value.y + value.height <= doc.height, 'INVALID_RECT', 'Rectangle must have positive integer dimensions inside the canvas.');
+  const rect = (value: unknown, what = 'Rectangle'): Rect => {
+    const given = object(value) ? ` (x ${value.x}, y ${value.y}, ${value.width}×${value.height})` : '';
+    requireValue(object(value) && integer(value.x) && integer(value.y) && integer(value.width) && integer(value.height) && value.width >= 1 && value.height >= 1 && value.x >= 0 && value.y >= 0 && value.x + value.width <= doc.width && value.y + value.height <= doc.height, 'INVALID_RECT', `${what}${given} must have positive integer dimensions inside the ${doc.width}×${doc.height} canvas.`);
     return value as unknown as Rect;
   };
   const scopeRect = editScope.rect === undefined ? undefined : rect(editScope.rect);
@@ -417,7 +486,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
   };
   const requireTileset = (): Tileset => { requireValue(doc.tileset, 'NO_TILESET', 'This asset has no tile grid; set one with the tileset operation.'); return doc.tileset; };
   const color = (value: unknown): number => {
-    requireValue(integer(value) && value >= 0 && value < doc.palette.length, 'INVALID_COLOR', 'Color must be an existing palette index.');
+    requireValue(integer(value) && value >= 0 && value < doc.palette.length, 'INVALID_COLOR', `Color ${typeof value === 'number' ? value : 'value'} must be an existing palette index (0..${doc.palette.length - 1}).`);
     return value;
   };
   const coordinate = (value: unknown): number => {
@@ -426,12 +495,12 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
   };
   const write = (target: Raster, x: number, y: number, value: number) => {
     if (!inside(canvas, x, y)) {
-      if (value !== 0) fail('OUT_OF_BOUNDS', 'Operation would clip an opaque pixel.');
+      if (value !== 0) fail('OUT_OF_BOUNDS', `Operation would clip an opaque pixel at (${x}, ${y}); the canvas is ${doc.width}×${doc.height}.`);
       return;
     }
     const index = y * doc.width + x;
     if (target.pixels[index] === value) return;
-    requireValue(writable(x, y), 'SCOPE_VIOLATION', 'Operation changes pixels outside the edit rectangle or mask.');
+    requireValue(writable(x, y), 'SCOPE_VIOLATION', `Operation changes the pixel at (${x}, ${y}) outside the edit rectangle or mask.`);
     target.pixels[index] = value;
   };
   const line = (target: Raster, x1: number, y1: number, x2: number, y2: number, value: number) => {
@@ -448,8 +517,16 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
     }
   };
 
-  for (const operation of operations) {
-    requireValue(object(operation) && typeof operation.op === 'string', 'INVALID_OPERATION', 'Operation must be a named object.');
+  // A drawing operation with frameIds runs once per frame; "all" is resolved when it runs, so frames added earlier in the batch count.
+  const repeatedFrames = (operation: Operation): string[] | null => {
+    const { frameId, frameIds } = operation as { frameId?: unknown; frameIds?: unknown };
+    if (!DRAWING_OPS.has(operation.op) || frameIds === undefined) return null;
+    requireValue(frameId === undefined, 'INVALID_OPERATION', 'Give frameId or frameIds, not both.');
+    if (frameIds === 'all') return doc.frames.filter(frame => !allowedFrames || allowedFrames.has(frame.id)).map(frame => frame.id);
+    requireValue(Array.isArray(frameIds) && frameIds.length > 0 && frameIds.length <= MAX_FRAMES && frameIds.every(identifier) && new Set(frameIds).size === frameIds.length, 'INVALID_FRAMES', 'frameIds must list unique frame IDs or be "all".');
+    return frameIds as string[];
+  };
+  const execute = (operation: Operation): void => {
     switch (operation.op) {
       case 'pixels': {
         const target = raster(operation.layerId, operation.frameId);
@@ -463,18 +540,20 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       case 'patch': {
         const target = raster(operation.layerId, operation.frameId);
         const area = rect(operation);
-        requireValue(Array.isArray(operation.pixels) && operation.pixels.length === area.width * area.height, 'INVALID_PATCH', 'Patch pixels must match its dimensions.');
+        requireValue(Array.isArray(operation.pixels) && operation.pixels.length === area.width * area.height, 'INVALID_PATCH', `Patch needs ${area.width}×${area.height} = ${area.width * area.height} pixels, got ${Array.isArray(operation.pixels) ? operation.pixels.length : 'none'}.`);
         for (let i = 0; i < operation.pixels.length; i++) write(target, area.x + i % area.width, area.y + Math.floor(i / area.width), color(operation.pixels[i]));
         break;
       }
       case 'rows': {
         const target = raster(operation.layerId, operation.frameId);
         requireValue(operation.mode === undefined || operation.mode === 'replace' || operation.mode === 'over', 'INVALID_OPERATION', 'Rows mode must be replace or over.');
-        requireValue(Array.isArray(operation.rows) && operation.rows.length > 0 && Array.from(operation.rows).every(row => typeof row === 'string' && row.length > 0 && row.length === operation.rows[0].length), 'INVALID_ROWS', 'Rows must be non-empty strings of equal length.');
-        const area = rect({ x: operation.x, y: operation.y, width: operation.rows[0].length, height: operation.rows.length });
+        requireValue(Array.isArray(operation.rows) && operation.rows.length > 0 && typeof operation.rows[0] === 'string' && operation.rows[0].length > 0, 'INVALID_ROWS', 'Rows must be non-empty strings of equal length.');
+        const uneven = Array.from(operation.rows).findIndex(row => typeof row !== 'string' || row.length !== operation.rows[0].length);
+        requireValue(uneven < 0, 'INVALID_ROWS', `Rows must be strings of equal length: row ${uneven} has ${typeof operation.rows[uneven] === 'string' ? operation.rows[uneven].length : 'no'} characters, row 0 has ${operation.rows[0].length}.`);
+        const area = rect({ x: operation.x, y: operation.y, width: operation.rows[0].length, height: operation.rows.length }, 'The rows block');
         for (let y = 0; y < area.height; y++) for (let x = 0; x < area.width; x++) {
           const symbol = operation.rows[y][x]; const value = rowIndex(symbol);
-          requireValue(value >= 0, 'INVALID_ROWS', `Unknown row symbol "${symbol}". Use . for transparent and 1-9, a-w for palette indices 1-32.`);
+          requireValue(value >= 0, 'INVALID_ROWS', `Unknown row symbol "${symbol}" in row ${y}, column ${x}. Use . for transparent and 1-9, a-w for palette indices 1-32.`);
           if (operation.mode === 'over' && value === 0) continue;
           write(target, area.x + x, area.y + y, color(value));
         }
@@ -585,6 +664,30 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       case 'stamp': {
         const target = raster(operation.layerId, operation.frameId);
         requireValue(operation.mode === undefined || operation.mode === 'over' || operation.mode === 'replace', 'INVALID_OPERATION', 'Stamp mode must be over or replace.');
+        if (operation.sourceAssetId !== undefined) {
+          // Another asset is read at its current revision; its colors are matched to this palette by value, not by index.
+          requireValue(operation.colorMatch === undefined || operation.colorMatch === 'exact' || operation.colorMatch === 'nearest', 'INVALID_OPERATION', 'colorMatch must be exact or nearest.');
+          requireValue(typeof operation.sourceAssetId === 'string' && context.resolveAsset, 'INVALID_OPERATION', 'sourceAssetId needs a stored asset; it is not available in a preview.');
+          const other = context.resolveAsset(operation.sourceAssetId);
+          const otherFrame = operation.sourceFrameId === undefined ? other.frames[0] : other.frames.find(frame => frame.id === operation.sourceFrameId);
+          requireValue(otherFrame, 'UNKNOWN_FRAME', `The source asset has no frame ${operation.sourceFrameId}; its frames are ${other.frames.map(frame => frame.id).join(', ')}.`);
+          requireValue(operation.sourceLayerId === undefined || other.layers.some(layer => layer.id === operation.sourceLayerId), 'UNKNOWN_LAYER', `The source asset has no layer ${operation.sourceLayerId}; its layers are ${other.layers.map(layer => layer.id).join(', ')}.`);
+          const indices = operation.sourceLayerId === undefined ? compositeIndices(other, otherFrame) : otherFrame.cels[operation.sourceLayerId];
+          const area: unknown = operation.rect === undefined ? { x: 0, y: 0, width: other.width, height: other.height } : operation.rect;
+          requireValue(object(area) && integer(area.x) && integer(area.y) && integer(area.width) && integer(area.height) && area.width >= 1 && area.height >= 1 && area.x >= 0 && area.y >= 0 && area.x + area.width <= other.width && area.y + area.height <= other.height, 'INVALID_RECT', `The source rect must lie inside the ${other.width}×${other.height} source canvas.`);
+          const from = area as unknown as Rect; const dx = coordinate(operation.dx ?? 0); const dy = coordinate(operation.dy ?? 0);
+          const colors = doc.palette.map(hex => hex.toUpperCase());
+          const mapping = other.palette.map((hex, index) => index === 0 ? 0 : operation.colorMatch === 'nearest' ? nearestColor(hex, doc.palette) : colors.indexOf(hex.toUpperCase()));
+          const missing = new Set<string>();
+          for (let y = from.y; y < from.y + from.height; y++) for (let x = from.x; x < from.x + from.width; x++) {
+            const value = indices[y * other.width + x];
+            if (operation.mode !== 'replace' && value === 0) continue;
+            if (mapping[value] < 0) missing.add(other.palette[value].toUpperCase());
+            else write(target, x + dx, y + dy, mapping[value]);
+          }
+          requireValue(!missing.size, 'PALETTE_MISMATCH', `The source uses ${[...missing].join(', ')}, which this palette lacks. Add the colors first or pass colorMatch "nearest".`);
+          break;
+        }
         // Reading another layer or frame does not need write scope, like a composite fill reference.
         const sourceLayerId = operation.sourceLayerId ?? operation.layerId;
         requireValue(doc.layers.some(layer => layer.id === sourceLayerId), 'UNKNOWN_LAYER', `Unknown layer: ${sourceLayerId}.`);
@@ -848,8 +951,32 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
           for (const frame of doc.frames) requireValue(frame.cels[layer.id].every(index => doc.palette[index].toUpperCase() === operation.colors[mapping[index]]?.toUpperCase()), 'LAYER_LOCKED', `Palette would change locked layer ${layer.id}.`);
         }
         if (operation.remap === 'nearest') for (const frame of doc.frames) for (const layer of doc.layers) frame.cels[layer.id] = frame.cels[layer.id].map(index => mapping[index]);
+        // Roles belong to palette slots: an index-preserving change keeps them, a remapped palette starts without them.
+        requireValue(operation.names === undefined || (Array.isArray(operation.names) && operation.names.length <= operation.colors.length && operation.names.every(item => item === null || (typeof item === 'string' && item.length <= MAX_COLOR_NAME))), 'INVALID_PALETTE_NAMES', `names runs parallel to colors, with texts of at most ${MAX_COLOR_NAME} characters or null.`);
+        const given = paletteInfoIssues(undefined, operation.ramps, operation.colors.length);
+        requireValue(!given.length, 'INVALID_PALETTE_NAMES', given[0]?.message ?? 'Invalid ramps.');
+        const names = operation.names ? operation.names.map(item => item ?? '') : operation.remap === 'nearest' ? undefined : doc.paletteNames;
+        const ramps = operation.ramps ?? (operation.remap === 'nearest' ? undefined : doc.ramps);
         doc.palette = [...operation.colors];
         doc.maxColors = maxColors;
+        delete doc.paletteNames; delete doc.ramps;
+        Object.assign(doc, fitPaletteInfo(names, ramps, doc.palette.length));
+        break;
+      }
+      case 'palette_names': {
+        requireLayerChanges();
+        requireValue(operation.names !== undefined || operation.ramps !== undefined, 'INVALID_PALETTE_NAMES', 'palette_names needs names or ramps.');
+        requireValue(operation.names === undefined || Array.isArray(operation.names), 'INVALID_PALETTE_NAMES', 'names must be a list of { index, name }.');
+        const names = doc.paletteNames ? [...doc.paletteNames] : doc.palette.map(() => '');
+        for (const entry of operation.names ?? []) {
+          requireValue(object(entry) && integer(entry.index) && entry.index >= 1 && entry.index < doc.palette.length && (entry.name === null || (typeof entry.name === 'string' && entry.name.length <= MAX_COLOR_NAME)), 'INVALID_PALETTE_NAMES', `Each name needs an opaque palette index below ${doc.palette.length} and a text of at most ${MAX_COLOR_NAME} characters or null.`);
+          names[entry.index] = entry.name ?? '';
+        }
+        const ramps = operation.ramps ?? doc.ramps;
+        const issues = paletteInfoIssues(names, ramps, doc.palette.length);
+        requireValue(!issues.length, 'INVALID_PALETTE_NAMES', issues[0]?.message ?? 'Invalid palette names.');
+        delete doc.paletteNames; delete doc.ramps;
+        Object.assign(doc, fitPaletteInfo(names, ramps, doc.palette.length));
         break;
       }
       case 'pivot': {
@@ -860,7 +987,15 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       }
       default: fail('UNKNOWN_OPERATION', `Unknown operation: ${(operation as { op: string }).op}.`);
     }
-  }
+  };
+  operations.forEach((operation, index) => {
+    try {
+      requireValue(object(operation) && typeof operation.op === 'string', 'INVALID_OPERATION', 'Operation must be a named object.');
+      const frames = repeatedFrames(operation);
+      if (!frames) execute(operation);
+      else for (const frameId of frames) execute({ ...operation, frameId, frameIds: undefined } as Operation);
+    } catch (error) { throw locate(error, index, (operation as { op?: unknown } | null)?.op); }
+  });
 
   if (preview) {
     assertDocument(doc);

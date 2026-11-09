@@ -733,3 +733,147 @@ describe('tilesets', () => {
     expect(validateDocument(incomplete).issues.find(issue => issue.code === 'TERRAIN_INCOMPLETE')?.message).toContain('1 mixed combinations');
   });
 });
+
+describe('batch errors an agent can act on', () => {
+  const failure = (action: () => unknown) => { try { action(); } catch (error) { return error as Error & { operationIndex?: number }; } throw new Error('expected a failure'); };
+
+  it('names the failing operation, its index and the offending position', () => {
+    const doc = make(8, 8); const ok: Operation = { op: 'rect', layerId: 'base', x: 0, y: 0, width: 2, height: 2, color: 1 };
+    const clipped = failure(() => run(doc, [ok, ok, points([[9, 3, 1]]), ok]));
+    expect(clipped.message).toBe('OUT_OF_BOUNDS: operations[2] (pixels): Operation would clip an opaque pixel at (9, 3); the canvas is 8×8.');
+    expect(clipped.operationIndex).toBe(2);
+    expect(failure(() => run(doc, [ok, { op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1111', '111', '1111'] }])).message).toBe('INVALID_ROWS: operations[1] (rows): Rows must be strings of equal length: row 1 has 3 characters, row 0 has 4.');
+    expect(failure(() => run(doc, [{ op: 'rows', layerId: 'base', x: 5, y: 0, rows: ['1111'] }])).message).toContain('INVALID_RECT: operations[0] (rows): The rows block (x 5, y 0, 4×1) must have positive integer dimensions inside the 8×8 canvas.');
+    expect(failure(() => run(doc, [points([[1, 1, 7]])])).message).toContain('Color 7 must be an existing palette index (0..3).');
+    expect(failure(() => run(doc, [points([[4, 4, 1]])], { layerIds: ['base'], rect: { x: 0, y: 0, width: 2, height: 2 } })).message).toContain('SCOPE_VIOLATION: operations[0] (pixels): Operation changes the pixel at (4, 4)');
+    expect(failure(() => run(doc, [{ op: 'patch', layerId: 'base', x: 0, y: 0, width: 2, height: 2, pixels: [1, 1, 1] }])).message).toContain('Patch needs 2×2 = 4 pixels, got 3.');
+  });
+});
+
+describe('drawing on several frames at once', () => {
+  const animation = () => createDocument({ width: 4, height: 2, palette, frames: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] });
+  const full: EditScope = { layerIds: ['base'] };
+
+  it('repeats a drawing operation on listed frames and on all frames in scope', () => {
+    const listed = run(animation(), [{ op: 'rows', layerId: 'base', frameIds: ['a', 'c'], x: 0, y: 0, rows: ['12'] }], full);
+    expect(listed.diff.changedFrames).toEqual(['a', 'c']);
+    expect([cel(listed.document, 0, 0).slice(0, 2), cel(listed.document, 0, 1).slice(0, 2), cel(listed.document, 0, 2).slice(0, 2)]).toEqual([[1, 2], [0, 0], [1, 2]]);
+    const all = run(animation(), [{ op: 'rect', layerId: 'base', frameIds: 'all', x: 0, y: 0, width: 4, height: 1, color: 3 }], full);
+    expect(all.diff).toMatchObject({ changedFrames: ['a', 'b', 'c'], changedPixels: 12 });
+    const scoped = run(animation(), [{ op: 'rect', layerId: 'base', frameIds: 'all', x: 0, y: 0, width: 1, height: 1, color: 2 }], { layerIds: ['base'], frameIds: ['b', 'c'] });
+    expect(scoped.diff.changedFrames).toEqual(['b', 'c']);
+  });
+
+  it('includes frames added earlier in the batch and keeps a stamp source per frame', () => {
+    const grown = run(animation(), [
+      { op: 'pixels', layerId: 'base', frameId: 'a', points: [[0, 0, 1]] },
+      { op: 'duplicate_frame', frameId: 'a', id: 'a2' },
+      { op: 'pixels', layerId: 'base', frameIds: 'all', points: [[3, 1, 2]] },
+      { op: 'stamp', layerId: 'base', frameIds: ['b', 'c'], sourceFrameId: 'a', rect: { x: 0, y: 0, width: 1, height: 1 }, dx: 1 },
+    ], { ...full, allowFrameChanges: true }).document;
+    expect(grown.frames.map(frame => frame.id)).toEqual(['a', 'a2', 'b', 'c']);
+    expect(grown.frames.map(frame => frame.cels.base[7])).toEqual([2, 2, 2, 2]);
+    expect(grown.frames.map(frame => frame.cels.base[1])).toEqual([0, 0, 1, 1]);
+  });
+
+  it('rejects ambiguous, repeated, unknown and out-of-scope frame targets', () => {
+    const doc = animation(); const draw = (extra: object): Operation => ({ op: 'pixels', layerId: 'base', points: [[0, 0, 1]], ...extra } as Operation);
+    expect(() => run(doc, [draw({ frameId: 'a', frameIds: ['b'] })], full)).toThrow('INVALID_OPERATION: operations[0] (pixels): Give frameId or frameIds, not both.');
+    expect(() => run(doc, [draw({ frameIds: ['a', 'a'] })], full)).toThrow('INVALID_FRAMES');
+    expect(() => run(doc, [draw({ frameIds: ['a', 'zz'] })], full)).toThrow('UNKNOWN_FRAME');
+    expect(() => run(doc, [draw({ frameIds: ['a', 'b'] })], { layerIds: ['base'], frameIds: ['a'] })).toThrow('SCOPE_VIOLATION');
+    // Frame structure operations keep their own frameIds list.
+    expect(run(doc, [{ op: 'frame_duration', frameIds: ['a', 'b'], durationMs: 200 }], { ...full, allowFrameChanges: true }).document.frames.map(frame => frame.durationMs)).toEqual([200, 200, 100]);
+  });
+});
+
+describe('stamping from another asset', () => {
+  const source = () => {
+    const doc = createDocument({ width: 3, height: 2, palette: ['#00000000', '#0000ff', '#00FF00', '#FF0000'], layers: [{ id: 'body', name: 'Body' }, { id: 'hat', name: 'Hat' }], frames: [{ id: 'one' }, { id: 'two' }] });
+    return applyOperations(doc, [
+      { op: 'rows', layerId: 'body', frameId: 'one', x: 0, y: 0, rows: ['12.', '.3.'] },
+      { op: 'rows', layerId: 'hat', frameId: 'one', x: 0, y: 0, rows: ['..3', '...'] },
+      { op: 'rows', layerId: 'body', frameId: 'two', x: 0, y: 0, rows: ['333', '...'] },
+    ], { layerIds: ['body', 'hat'] }).document;
+  };
+  const context = { resolveAsset: (id: string) => { if (id !== 'other') throw new Error('NOT_FOUND: unknown asset'); return source(); } };
+  const stamp = (doc: PixelDocument, extra: object) => applyOperations(doc, [{ op: 'stamp', layerId: 'base', sourceAssetId: 'other', ...extra } as Operation], { layerIds: ['base'] }, context);
+
+  it('copies the visible composite by color value, with offset, region, layer and frame choice', () => {
+    // palette here: 1 red, 2 blue, 3 white — the source indices differ, so colors must be matched by hex.
+    const target = createDocument({ width: 6, height: 4, palette: ['#00000000', '#FF0000', '#0000FF', '#FFFFFF', '#00FF00'] });
+    const whole = stamp(target, { dx: 2, dy: 1 }).document;
+    expect([cel(whole).slice(6, 12), cel(whole).slice(12, 18)]).toEqual([[0, 0, 2, 4, 1, 0], [0, 0, 0, 1, 0, 0]]);
+    const layer = stamp(target, { sourceLayerId: 'hat' }).document;
+    expect(cel(layer).slice(0, 3)).toEqual([0, 0, 1]);
+    const region = stamp(target, { sourceFrameId: 'two', rect: { x: 1, y: 0, width: 2, height: 1 }, dx: -1, dy: 3 }).document;
+    expect(cel(region).slice(18, 24)).toEqual([1, 1, 0, 0, 0, 0]);
+    const replaced = applyOperations(whole, [{ op: 'stamp', layerId: 'base', sourceAssetId: 'other', sourceLayerId: 'hat', dx: 2, dy: 1, mode: 'replace' }], { layerIds: ['base'] }, context).document;
+    expect(cel(replaced).slice(6, 12)).toEqual([0, 0, 0, 0, 1, 0]);
+  });
+
+  it('reports missing colors, approximates on request and explains bad sources', () => {
+    const narrow = createDocument({ width: 6, height: 4, palette: ['#00000000', '#FF0000', '#000080'] });
+    expect(() => stamp(narrow, {})).toThrow('PALETTE_MISMATCH: operations[0] (stamp): The source uses #0000FF, #00FF00, which this palette lacks.');
+    expect(cel(stamp(narrow, { colorMatch: 'nearest' }).document).slice(0, 3)).toEqual([2, 2, 1]);
+    expect(() => stamp(narrow, { sourceLayerId: 'cape', colorMatch: 'nearest' })).toThrow('UNKNOWN_LAYER: operations[0] (stamp): The source asset has no layer cape; its layers are body, hat.');
+    expect(() => stamp(narrow, { sourceFrameId: 'nine', colorMatch: 'nearest' })).toThrow('its frames are one, two');
+    expect(() => stamp(narrow, { rect: { x: 2, y: 0, width: 2, height: 1 }, colorMatch: 'nearest' })).toThrow('INVALID_RECT: operations[0] (stamp): The source rect must lie inside the 3×2 source canvas.');
+    expect(() => stamp(createDocument({ width: 2, height: 2, palette: ['#00000000', '#0000FF', '#00FF00', '#FF0000'] }), {})).toThrow('OUT_OF_BOUNDS');
+    expect(() => stamp(narrow, { sourceAssetId: 'gone' })).toThrow('NOT_FOUND: operations[0] (stamp): unknown asset');
+    expect(() => previewOperations(narrow, [{ op: 'stamp', layerId: 'base', sourceAssetId: 'other' }], { layerIds: ['base'] })).toThrow('INVALID_OPERATION');
+  });
+});
+
+describe('palette roles and ramps', () => {
+  const named = () => createDocument({ width: 2, height: 2, palette, maxColors: 8, paletteNames: ['', 'blood', 'water'], ramps: [{ name: 'cold', indices: [2, 3] }] });
+  const meta: EditScope = { layerIds: ['base'], allowLayerChanges: true };
+  const colors: EditScope = { layerIds: ['base'], allowPaletteChanges: true };
+
+  it('gives every preset its own palette with named colors and valid ramps', () => {
+    expect(STYLE_PRESETS['16-bit'].palette).not.toEqual(STYLE_PRESETS['8-bit'].palette);
+    expect(STYLE_PRESETS['16-bit'].palette).toHaveLength(33);
+    for (const style of Object.values(STYLE_PRESETS)) {
+      const doc = createDocument(style);
+      expect(doc.paletteNames).toHaveLength(style.palette.length);
+      expect(doc.paletteNames!.slice(1).every(Boolean)).toBe(true);
+      expect(validateDocument(doc).valid).toBe(true);
+    }
+  });
+
+  it('pads short name lists and rejects names or ramps that do not fit the palette', () => {
+    expect(named().paletteNames).toEqual(['', 'blood', 'water', '']);
+    expect(createDocument({ width: 1, height: 1, palette }).paletteNames).toBeUndefined();
+    expect(() => createDocument({ width: 1, height: 1, palette, paletteNames: ['', 'a', 'b', 'c', 'd'] })).toThrow('INVALID_PALETTE_NAMES');
+    expect(() => createDocument({ width: 1, height: 1, palette, ramps: [{ name: 'bad', indices: [1, 9] }] })).toThrow('INVALID_PALETTE_NAMES');
+    expect(() => createDocument({ width: 1, height: 1, palette, ramps: [{ name: 'x', indices: [1, 2] }, { name: 'x', indices: [2, 3] }] })).toThrow('unique name');
+  });
+
+  it('names colors and replaces ramps without touching pixels, also on a locked palette', () => {
+    const locked = { ...named(), paletteLocked: true };
+    const result = run(locked, [{ op: 'palette_names', names: [{ index: 3, name: 'foam' }, { index: 1, name: null }], ramps: [{ name: 'sea', indices: [2, 3] }] }], meta);
+    expect(result.document).toMatchObject({ paletteNames: ['', '', 'water', 'foam'], ramps: [{ name: 'sea', indices: [2, 3] }] });
+    expect(result.diff.changedPixels).toBe(0);
+    expect(named().ramps).toEqual([{ name: 'cold', indices: [2, 3] }]);
+    expect(() => run(named(), [{ op: 'palette_names', names: [{ index: 4, name: 'none' }] }], meta)).toThrow('INVALID_PALETTE_NAMES');
+    expect(() => run(named(), [{ op: 'palette_names', ramps: [{ name: 'short', indices: [2] }] }], meta)).toThrow('INVALID_PALETTE_NAMES');
+    expect(() => run(named(), [{ op: 'palette_names' }], meta)).toThrow('needs names or ramps');
+    expect(() => run(named(), [{ op: 'palette_names', names: [{ index: 1, name: 'x' }] }], { layerIds: ['base'] })).toThrow('LAYER_CHANGE_FORBIDDEN');
+    const cleared = run(named(), [{ op: 'palette_names', names: [{ index: 1, name: null }, { index: 2, name: null }], ramps: [] }], meta).document;
+    expect(cleared.paletteNames).toBeUndefined();
+    expect(cleared.ramps).toBeUndefined();
+  });
+
+  it('keeps roles with their palette slot, fits them to a shorter palette and drops them on a remap', () => {
+    const recolored = run(named(), [{ op: 'palette', colors: ['#00000000', '#AA0000', '#000088', '#EEEEEE', '#123456'] }], colors).document;
+    expect(recolored).toMatchObject({ paletteNames: ['', 'blood', 'water', '', ''], ramps: [{ name: 'cold', indices: [2, 3] }] });
+    const shorter = run(named(), [{ op: 'palette', colors: ['#00000000', '#AA0000', '#000088'] }], colors).document;
+    expect(shorter.paletteNames).toEqual(['', 'blood', 'water']);
+    expect(shorter.ramps).toBeUndefined();
+    const remapped = run(named(), [{ op: 'palette', colors: ['#00000000', '#101010', '#F0F0F0'], remap: 'nearest' }], colors).document;
+    expect(remapped.paletteNames).toBeUndefined();
+    const renamed = run(named(), [{ op: 'palette', colors: ['#00000000', '#101010', '#F0F0F0'], remap: 'nearest', names: [null, 'ink', 'paper'], ramps: [{ name: 'mono', indices: [1, 2] }] }], colors).document;
+    expect(renamed).toMatchObject({ paletteNames: ['', 'ink', 'paper'], ramps: [{ name: 'mono', indices: [1, 2] }] });
+    expect(() => run(named(), [{ op: 'palette', colors: ['#00000000', '#101010'], ramps: [{ name: 'gone', indices: [1, 3] }] }], colors)).toThrow('INVALID_PALETTE_NAMES');
+  });
+});

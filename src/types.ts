@@ -1,5 +1,8 @@
 export type AssetType = 'character' | 'item' | 'prop' | 'ui' | 'tileset';
 export type PixelStyle = '1-bit' | 'game-boy' | '8-bit' | '16-bit';
+export type Perspective = 'front' | 'side' | 'top-down' | 'three-quarter' | 'isometric';
+/** A named run of palette indices from dark to light, for shading one material consistently. */
+export interface ColorRamp { name: string; indices: number[] }
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface PixelLayer { id: string; name: string; visible: boolean; locked: boolean }
 /** One frame of the animation; cels hold one raster per layer ID. */
@@ -27,6 +30,9 @@ export interface PixelDocument {
   palette: string[];
   maxColors: number;
   paletteLocked: boolean;
+  /** Role names parallel to palette ("" = unnamed; index 0 is transparency). */
+  paletteNames?: string[];
+  ramps?: ColorRamp[];
   layers: PixelLayer[];
   frames: PixelFrame[];
   tags: AnimationTag[];
@@ -45,10 +51,13 @@ export interface ProjectStyle {
   paletteLocked: boolean;
   width: number;
   height: number;
-  perspective: 'front' | 'side';
+  perspective: Perspective;
   lighting: string;
   outline: string;
   theme: string;
+  /** Defaults for new assets that use the project palette. */
+  paletteNames?: string[];
+  ramps?: ColorRamp[];
 }
 export interface Project { id: string; name: string; style: ProjectStyle; createdAt: string }
 /** A project with what its overview card shows: asset count, last change and the most recently changed assets. */
@@ -103,7 +112,8 @@ export interface EditScope {
   allowLayerChanges?: boolean;
   allowFrameChanges?: boolean;
 }
-type DrawingBase = { layerId: string; frameId?: string };
+/** frameIds repeats a drawing operation on several frames; "all" means every frame the edit scope allows. */
+type DrawingBase = { layerId: string; frameId?: string; frameIds?: string[] | 'all' };
 export type Operation =
   | (DrawingBase & { op: 'pixels'; points: [number, number, number][] })
   | (DrawingBase & { op: 'patch'; x: number; y: number; width: number; height: number; pixels: number[] })
@@ -119,7 +129,7 @@ export type Operation =
   | (DrawingBase & { op: 'outline'; color: number; rect?: Rect; reference?: 'layer' | 'composite'; corners?: boolean })
   | (DrawingBase & { op: 'shift'; dx: number; dy: number; rect?: Rect })
   | (DrawingBase & { op: 'autotile'; template: AutotileTemplate; x?: number; y?: number; terrain?: number })
-  | (DrawingBase & { op: 'stamp'; sourceLayerId?: string; sourceFrameId?: string; rect?: Rect; dx?: number; dy?: number; mode?: 'over' | 'replace' })
+  | (DrawingBase & { op: 'stamp'; sourceAssetId?: string; sourceLayerId?: string; sourceFrameId?: string; rect?: Rect; dx?: number; dy?: number; mode?: 'over' | 'replace'; colorMatch?: 'exact' | 'nearest' })
   | { op: 'add_frame'; id: string; index?: number; durationMs?: number }
   | { op: 'duplicate_frame'; frameId: string; id: string; index?: number }
   | { op: 'remove_frame'; frameId: string }
@@ -133,7 +143,8 @@ export type Operation =
   | { op: 'reorder_layers'; layerIds: string[] }
   | { op: 'merge_layers'; layerIds: string[] }
   | { op: 'resize_canvas'; width: number; height: number; offsetX?: number; offsetY?: number }
-  | { op: 'palette'; colors: string[]; remap?: 'index' | 'nearest'; maxColors?: number }
+  | { op: 'palette'; colors: string[]; remap?: 'index' | 'nearest'; maxColors?: number; names?: (string | null)[]; ramps?: ColorRamp[] }
+  | { op: 'palette_names'; names?: { index: number; name: string | null }[]; ramps?: ColorRamp[] }
   | { op: 'pivot'; x: number; y: number }
   | { op: 'tileset'; tileWidth?: number; tileHeight?: number; terrainMode?: TerrainMode; terrains?: TerrainType[] }
   | { op: 'remove_tileset' }
@@ -148,10 +159,13 @@ export interface ApplyRequest {
   operations: Operation[];
 }
 export interface ApplyResult { asset: Asset; revision: Revision; diff: PixelDiff }
+export type RunQuality = 'draft' | 'standard' | 'polished';
 export interface Review {
   revisionId: string;
   observations: string;
   issues: string[];
+  /** Who looked: the drawing agent itself or a separate reviewer that saw only the image and the task. */
+  reviewer?: 'self' | 'independent';
   createdAt: string;
 }
 export interface ArtistRun {
@@ -159,10 +173,12 @@ export interface ArtistRun {
   projectId: string;
   assetId?: string;
   prompt: string;
+  /** Review and batch budget; missing means standard. */
+  quality?: RunQuality;
   status: 'active' | 'completed' | 'needs_review' | 'cancelled' | 'interrupted';
   reviews: Review[];
   inspectedRevisionId?: string;
-  /** Frames shown by the latest inspection of inspectedRevisionId. */
+  /** Frames shown in full by the inspections of inspectedRevisionId so far. */
   inspectedFrameIds?: string[];
   batchCount: number;
   createdAt: string;
@@ -189,6 +205,8 @@ export interface CreateAssetInput {
   height?: number;
   palette?: string[];
   maxColors?: number;
+  paletteNames?: string[];
+  ramps?: ColorRamp[];
   layers?: { id: string; name: string }[];
   frames?: { id: string; durationMs?: number }[];
   animationTags?: AnimationTagInput[];

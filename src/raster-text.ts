@@ -17,6 +17,7 @@ export function encodeRows(indices: ArrayLike<number>, width: number, rect: Rect
   return rows;
 }
 
-export function rowLegend(palette: string[]): Record<string, string> {
-  return Object.fromEntries(palette.map((color, index) => [ROW_ALPHABET[index], index ? color : 'transparent']));
+/** Row symbol to color; a role name follows the hex value when the palette has one. */
+export function rowLegend(palette: string[], names?: string[]): Record<string, string> {
+  return Object.fromEntries(palette.map((color, index) => [ROW_ALPHABET[index], index ? `${color}${names?.[index] ? ` ${names[index]}` : ''}` : 'transparent']));
 }

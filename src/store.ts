@@ -2,10 +2,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
 import * as schema from './contracts.js';
 import { applyOperations, createDocument, STYLE_PRESETS, upgradeDocument, validateDocument } from './engine.js';
-import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDiff, PixelDocument, Project, ProjectOverview, Revision, RevisionSummary } from './types.js';
+import type { ApplyRequest, ApplyResult, ArtistRun, Asset, AssetDetail, CreateAssetInput, PixelDiff, PixelDocument, Project, ProjectOverview, Revision, RevisionSummary, RunQuality } from './types.js';
 
 import { AppError } from './errors.js';
 export { AppError } from './errors.js';
@@ -22,6 +23,20 @@ const upgradeRevision = (revision: Revision): Revision => ({ ...revision, docume
 const upgradeStored = <T>(value: T): T => {
   const revision = (value as { revision?: Revision } | null)?.revision;
   return revision?.document ? { ...value, revision: upgradeRevision(revision) } : value;
+};
+// Rasters repeat heavily across frames and layers, so a revision is stored gzipped; rows written before that stay plain JSON text and are read as such.
+const packRevision = (revision: Revision): Uint8Array => gzipSync(JSON.stringify(revision));
+const unpackRevision = (data: string | Uint8Array): Revision => JSON.parse(typeof data === 'string' ? data : gunzipSync(data).toString('utf8'));
+
+/** Review rounds (first review included) and drawing batches a run may use, by the quality the task asks for. */
+export const RUN_LIMITS: Record<RunQuality, { reviews: number; batches: number; targetMinutes: number | null }> = {
+  draft: { reviews: 2, batches: 40, targetMinutes: 5 },
+  standard: { reviews: 4, batches: 120, targetMinutes: 10 },
+  polished: { reviews: 8, batches: 400, targetMinutes: null },
+};
+export const runBudget = (run: ArtistRun) => {
+  const quality = run.quality ?? 'standard'; const limits = RUN_LIMITS[quality];
+  return { quality, reviews: { used: run.reviews.length, max: limits.reviews }, batches: { used: run.batchCount, max: limits.batches }, targetMinutes: limits.targetMinutes };
 };
 const isBlank = (doc: PixelDocument) => doc.frames.every(frame => Object.values(frame.cels).every(pixels => pixels.every(index => index === 0)));
 
@@ -45,7 +60,7 @@ export class Store extends EventEmitter {
         const hasSummary = columns.some(column => column.name === 'summary');
         const { user_version: version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
         if (!hasSummary) this.db.exec('ALTER TABLE revisions ADD COLUMN summary TEXT');
-        if (!hasSummary || version < 2) this.db.exec("UPDATE revisions SET summary=json_remove(data,'$.document','$.operations','$.validation','$.runId') WHERE summary IS NULL");
+        if (!hasSummary || version < 2) this.db.exec("UPDATE revisions SET summary=json_remove(data,'$.document','$.operations','$.validation','$.runId') WHERE summary IS NULL AND typeof(data)='text'");
         // Migrated summaries follow large raster payloads; a covering index avoids reading their overflow pages.
         this.db.exec('CREATE INDEX IF NOT EXISTS revision_summary ON revisions(asset_id,summary)');
         this.db.exec('PRAGMA user_version=2');
@@ -56,21 +71,33 @@ export class Store extends EventEmitter {
     }
   }
   close() { this.db.close(); }
+  /** Rewrites revisions stored as plain JSON in the packed form and returns the file space; run it while nothing else uses the database. */
+  compact(): { revisions: number; bytesBefore: number; bytesAfter: number } {
+    const size = () => { const { size } = this.db.prepare('SELECT page_count * page_size AS size FROM pragma_page_count(), pragma_page_size()').get() as { size: number }; return size; };
+    const bytesBefore = size();
+    const ids = (this.db.prepare("SELECT id FROM revisions WHERE typeof(data)='text'").all() as { id: string }[]).map(row => row.id);
+    for (const id of ids) this.transaction(() => {
+      const { data } = this.db.prepare('SELECT data FROM revisions WHERE id=?').get(id) as { data: string };
+      this.db.prepare('UPDATE revisions SET data=? WHERE id=?').run(gzipSync(data), id);
+    });
+    this.db.exec('VACUUM; PRAGMA wal_checkpoint(TRUNCATE);');
+    return { revisions: ids.length, bytesBefore, bytesAfter: size() };
+  }
   private transaction<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   private read<T>(table: 'projects' | 'assets' | 'revisions' | 'runs', id: string): T {
-    const row = this.db.prepare(`SELECT data FROM ${table} WHERE id=?`).get(id) as { data: string } | undefined;
+    const row = this.db.prepare(`SELECT data FROM ${table} WHERE id=?`).get(id) as { data: string | Uint8Array } | undefined;
     if (!row) throw new AppError('NOT_FOUND', `${table} ${id} was not found.`, 404);
-    return JSON.parse(row.data) as T;
+    return (table === 'revisions' ? unpackRevision(row.data) : JSON.parse(row.data as string)) as T;
   }
   private putAsset(asset: Asset) { this.db.prepare('UPDATE assets SET data=? WHERE id=?').run(JSON.stringify(asset), asset.id); }
   private putRun(run: ArtistRun) { this.db.prepare('INSERT OR REPLACE INTO runs(id,data) VALUES(?,?)').run(run.id, JSON.stringify(run)); }
   private insertRevision(revision: Revision) {
     const { id, assetId, parentId, label, actor, createdAt } = revision;
-    this.db.prepare('INSERT INTO revisions(id,asset_id,summary,data) VALUES(?,?,?,?)').run(id, assetId, JSON.stringify({ id, assetId, parentId, label, actor, createdAt }), JSON.stringify(revision));
+    this.db.prepare('INSERT INTO revisions(id,asset_id,summary,data) VALUES(?,?,?,?)').run(id, assetId, JSON.stringify({ id, assetId, parentId, label, actor, createdAt }), packRevision(revision));
   }
   private changed(type: string, projectId: string, assetId?: string) { this.emit('change', { type, projectId, assetId }); }
   listProjects(): Project[] { return (this.db.prepare('SELECT data FROM projects ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data)); }
@@ -158,7 +185,7 @@ export class Store extends EventEmitter {
   }
   listRevisions(assetId: string): Revision[] {
     this.getAsset(assetId);
-    return (this.db.prepare('SELECT data FROM revisions WHERE asset_id=? ORDER BY rowid DESC').all(assetId) as { data: string }[]).map(row => upgradeRevision(JSON.parse(row.data)));
+    return (this.db.prepare('SELECT data FROM revisions WHERE asset_id=? ORDER BY rowid DESC').all(assetId) as { data: string | Uint8Array }[]).map(row => upgradeRevision(unpackRevision(row.data)));
   }
   listRevisionSummaries(assetId: string): RevisionSummary[] {
     this.read<Asset>('assets', assetId);
@@ -173,9 +200,12 @@ export class Store extends EventEmitter {
     const width = input.width ?? project.style.width;
     const height = input.height ?? project.style.height;
     if ((input.tileWidth === undefined) !== (input.tileHeight === undefined)) throw new AppError('INVALID_TILESET', 'tileWidth and tileHeight go together.');
+    // Role names and ramps belong to a palette; an asset with its own palette starts without the project's.
     const doc = document ?? createDocument({
       width, height, palette: input.palette ?? project.style.palette,
       maxColors: input.maxColors ?? project.style.maxColors, paletteLocked: project.style.paletteLocked,
+      paletteNames: input.paletteNames ?? (input.palette ? undefined : project.style.paletteNames),
+      ramps: input.ramps ?? (input.palette ? undefined : project.style.ramps),
       layers: input.layers ?? [{ id: 'body', name: input.type === 'character' ? 'Body' : 'Base' }],
       frames: input.frames, tags: input.animationTags,
       pivot: { x: width / 2, y: input.type === 'character' ? height : height / 2 },
@@ -184,10 +214,13 @@ export class Store extends EventEmitter {
     const validation = validateDocument(doc);
     if (!validation.valid) throw new AppError('INVALID_DOCUMENT', validation.issues.filter(i => i.severity === 'error').map(i => i.message).join(' '));
     const timestamp = now();
+    const { paletteNames: _names, ramps: _ramps, ...projectStyle } = structuredClone(project.style);
+    // Side and front views describe characters; other assets of such a project face the viewer. Top-down, three-quarter and isometric apply to everything.
+    const perspective = input.type === 'character' || !['front', 'side'].includes(project.style.perspective) ? project.style.perspective : 'front';
     const asset: Asset = {
       id: newId('asset'), projectId: input.projectId, name: input.name, type: input.type,
       tags: input.tags ?? [], headRevisionId: newId('rev'), sourceAssetId: input.sourceAssetId,
-      style: { ...structuredClone(project.style), width: doc.width, height: doc.height, palette: [...doc.palette], maxColors: doc.maxColors, perspective: input.type === 'character' ? project.style.perspective : 'front' },
+      style: { ...projectStyle, width: doc.width, height: doc.height, palette: [...doc.palette], maxColors: doc.maxColors, perspective, ...(doc.paletteNames ? { paletteNames: [...doc.paletteNames] } : {}), ...(doc.ramps ? { ramps: structuredClone(doc.ramps) } : {}) },
       createdAt: timestamp, updatedAt: timestamp,
     };
     const revision: Revision = { id: asset.headRevisionId, assetId: asset.id, parentId: null, document: doc, label: actor === 'import' ? 'PNG imported' : 'Asset created', actor, runId: input.runId, operations: [], validation, createdAt: timestamp };
@@ -265,9 +298,10 @@ export class Store extends EventEmitter {
       if (request.runId) {
         run = this.requireActiveRun(request.runId);
         if (run.projectId !== asset.projectId || (run.assetId && run.assetId !== assetId)) throw new AppError('RUN_ASSET', 'Run and asset do not match.');
-        if (run.batchCount >= 120 || run.reviews.length >= 4) throw new AppError('RUN_LIMIT', 'The correction budget is used up. Review the current state and finish.');
+        const limits = RUN_LIMITS[run.quality ?? 'standard'];
+        if (run.batchCount >= limits.batches || run.reviews.length >= limits.reviews) throw new AppError('RUN_LIMIT', 'The correction budget is used up. Review the current state and finish.');
       }
-      const applied = applyOperations(base.document, request.operations, request.editScope);
+      const applied = applyOperations(base.document, request.operations, request.editScope, { resolveAsset: id => this.getAsset(id).revision.document });
       const revision: Revision = {
         id: newId('rev'), assetId, parentId: base.id, document: applied.document,
         label: request.label ?? 'Pixels edited', actor: request.actor ?? 'human', runId: request.runId,
@@ -291,7 +325,7 @@ export class Store extends EventEmitter {
       const { asset, revision: current } = this.getAsset(assetId);
       if (current.id !== request.expectedRevision) throw new AppError('REVISION_CONFLICT', 'The current revision has changed.', 409);
       const source = this.getRevision(assetId, request.revisionId);
-      const revision: Revision = { ...structuredClone(source), id: newId('rev'), parentId: current.id, actor: 'human', runId: undefined, label: request.label ?? `Wiederhergestellt: ${source.label}`, operations: [], createdAt: now() };
+      const revision: Revision = { ...structuredClone(source), id: newId('rev'), parentId: current.id, actor: request.actor ?? 'human', runId: undefined, label: request.label ?? `Restored: ${source.label}`, operations: [], createdAt: now() };
       this.appendRevision(asset, revision);
       const response = { asset, revision };
       this.saveRequest(assetId, request.requestId, payload, response);
@@ -326,13 +360,18 @@ export class Store extends EventEmitter {
       return resumed;
     });
   }
-  inspected(runId: string, assetId: string, revisionId: string, frameIds?: string[]) {
-    this.transaction(() => {
+  /** Records frames an agent saw in full. Inspections of one revision add up, so a long animation can be viewed in legible parts. */
+  inspected(runId: string, assetId: string, revisionId: string, frameIds?: string[]): { inspectedFrameIds: string[]; missingFrameIds: string[] } {
+    return this.transaction(() => {
       const run = this.requireActiveRun(runId);
       if (run.assetId !== assetId) throw new AppError('RUN_ASSET', 'The image does not belong to this run.');
       const { revision } = this.getAsset(assetId);
       if (revision.id !== revisionId) throw new AppError('REVISION_CONFLICT', 'Only the current revision can be inspected for completion.', 409);
-      this.putRun({ ...run, inspectedRevisionId: revisionId, inspectedFrameIds: frameIds ?? revision.document.frames.map(frame => frame.id), updatedAt: now() });
+      const all = revision.document.frames.map(frame => frame.id);
+      const seen = new Set([...(run.inspectedRevisionId === revisionId ? run.inspectedFrameIds ?? [] : []), ...(frameIds ?? all)]);
+      const inspectedFrameIds = all.filter(id => seen.has(id));
+      this.putRun({ ...run, inspectedRevisionId: revisionId, inspectedFrameIds, updatedAt: now() });
+      return { inspectedFrameIds, missingFrameIds: all.filter(id => !seen.has(id)) };
     });
   }
   recordReview(runId: string, input: unknown): ArtistRun {
@@ -340,7 +379,8 @@ export class Store extends EventEmitter {
     const result = this.transaction(() => {
       const run = this.requireActiveRun(runId);
       if (run.inspectedRevisionId !== parsed.revisionId || !run.assetId || this.getAsset(run.assetId).revision.id !== parsed.revisionId) throw new AppError('INSPECTION_REQUIRED', 'First look at exactly the current revision with inspect_asset.');
-      if (run.reviews.length >= 4) throw new AppError('RUN_LIMIT', 'At most one first review and three correction rounds.');
+      const budget = runBudget(run);
+      if (budget.reviews.used >= budget.reviews.max) throw new AppError('RUN_LIMIT', `At most one first review and ${budget.reviews.max - 1} correction rounds for a ${budget.quality} run.`);
       const updated = { ...run, reviews: [...run.reviews, { ...parsed, createdAt: now() }], updatedAt: now() };
       this.putRun(updated);
       return updated;
@@ -358,7 +398,7 @@ export class Store extends EventEmitter {
         if (run.inspectedRevisionId !== revision.id || review?.revisionId !== revision.id) throw new AppError('REVIEW_REQUIRED', 'The final revision must be inspected and reviewed.');
         // Older runs recorded no frame coverage; they predate animation and inspected their only frame.
         const shown = new Set(run.inspectedFrameIds ?? [revision.document.frames[0].id]);
-        if (revision.document.frames.some(frame => !shown.has(frame.id))) throw new AppError('REVIEW_REQUIRED', 'For animations the last inspection must show every frame, for example as a sprite sheet.');
+        if (revision.document.frames.some(frame => !shown.has(frame.id))) throw new AppError('REVIEW_REQUIRED', 'For animations the inspections of the final revision must show every frame, as one sprite sheet or in several parts.');
         if (!revision.validation.valid || revision.validation.opaquePixels === 0 || review.issues.length) throw new AppError('NEEDS_REVIEW', 'Open issues or an empty asset only allow needs_review.');
       }
       const updated = { ...run, status, updatedAt: now() };

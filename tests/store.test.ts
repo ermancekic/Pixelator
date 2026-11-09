@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
-import { AppError, Store } from '../src/store.js';
+import { AppError, RUN_LIMITS, runBudget, Store } from '../src/store.js';
 import type { ApplyRequest, AssetDetail, LegacyPixelDocument, PixelDocument, Revision } from '../src/types.js';
 import { cel } from './helpers.js';
 
@@ -444,5 +444,145 @@ describe('documents stored before animation support', () => {
     expect(() => store.createAsset({ projectId: project.id, name: 'Bad', type: 'item', frames: [{ id: 'a' }], animationTags: [{ name: 'x', from: 0, to: 4 }] })).toThrow('INVALID_TAGS');
     const variant = store.createVariant(detail.asset.id, 'Walker copy');
     expect(variant.revision.document.frames).toEqual(detail.revision.document.frames);
+  });
+});
+
+describe('packed revision storage', () => {
+  const kind = (store: Store, id: string) => (store.db.prepare('SELECT typeof(data) AS kind FROM revisions WHERE id=?').get(id) as { kind: string }).kind;
+
+  it('stores revisions compressed and reads them back exactly after a restart', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'pixelator-store-')); folders.push(folder);
+    const path = join(folder, 'pixelator.sqlite');
+    const { store, detail } = setup(open(path));
+    const painted = store.apply(detail.asset.id, request(detail, 'packed'));
+    expect([kind(store, detail.revision.id), kind(store, painted.revision.id)]).toEqual(['blob', 'blob']);
+    close(store);
+    const reopened = open(path);
+    expect(reopened.getAsset(detail.asset.id).revision).toEqual(painted.revision);
+    expect(reopened.listRevisions(detail.asset.id)).toEqual([painted.revision, detail.revision]);
+    expect(reopened.exportAsset(detail.asset.id).revisions).toHaveLength(2);
+  });
+
+  it('keeps reading plain-text revisions and packs them on request without changing their content', () => {
+    const { store, detail } = setup();
+    const big = store.createAsset({ projectId: detail.asset.projectId, name: 'Banner', type: 'prop', width: 256, height: 128, frames: Array.from({ length: 4 }, (_, i) => ({ id: `f${i}` })) });
+    const painted = store.apply(detail.asset.id, request(detail, 'plain'));
+    const revisions = [detail.revision, painted.revision, big.revision];
+    for (const revision of revisions) store.db.prepare('UPDATE revisions SET data=? WHERE id=?').run(JSON.stringify(revision), revision.id);
+    expect(revisions.map(revision => kind(store, revision.id))).toEqual(['text', 'text', 'text']);
+    expect(store.getAsset(detail.asset.id).revision).toEqual(painted.revision);
+    const result = store.compact();
+    expect(result.revisions).toBe(3);
+    expect(result.bytesAfter).toBeLessThan(result.bytesBefore / 4);
+    expect(revisions.map(revision => kind(store, revision.id))).toEqual(['blob', 'blob', 'blob']);
+    expect(store.listRevisions(detail.asset.id)).toEqual([painted.revision, detail.revision]);
+    expect(store.getAsset(big.asset.id).revision).toEqual(big.revision);
+    expect(store.compact().revisions).toBe(0);
+    expect(store.apply(detail.asset.id, request(painted, 'after-compact', { operations: [{ op: 'pixels', layerId: 'body', points: [[3, 3, 2]] }] })).revision.parentId).toBe(painted.revision.id);
+  });
+});
+
+describe('run quality, review budget and partial inspections', () => {
+  it('sizes the review and batch budget by the requested quality', () => {
+    const { store, project, detail } = setup();
+    expect(RUN_LIMITS).toMatchObject({ draft: { reviews: 2, batches: 40 }, standard: { reviews: 4, batches: 120, targetMinutes: 10 }, polished: { reviews: 8, batches: 400, targetMinutes: null } });
+    const standard = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Default' });
+    expect(standard.quality).toBeUndefined();
+    expect(runBudget(standard)).toEqual({ quality: 'standard', reviews: { used: 0, max: 4 }, batches: { used: 0, max: 120 }, targetMinutes: 10 });
+    store.finishRun(standard.id, 'cancelled');
+    expect(() => store.startRun({ projectId: project.id, prompt: 'Bad', quality: 'perfect' })).toThrow();
+
+    const draft = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Quick sketch', quality: 'draft' });
+    let head = store.apply(detail.asset.id, request(detail, 'draft-1', { runId: draft.id }));
+    const review = () => { store.inspected(draft.id, detail.asset.id, head.revision.id); return store.recordReview(draft.id, { revisionId: head.revision.id, observations: 'Looked at it.', issues: [], reviewer: 'independent' }); };
+    review();
+    head = store.apply(detail.asset.id, request(head, 'draft-2', { runId: draft.id, operations: [{ op: 'pixels', layerId: 'body', points: [[4, 4, 2]] }] }));
+    expect(review().reviews.map(item => item.reviewer)).toEqual(['independent', 'independent']);
+    let failure: unknown;
+    try { review(); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ code: 'RUN_LIMIT', message: 'At most one first review and 1 correction rounds for a draft run.' });
+    appError(() => store.apply(detail.asset.id, request(head, 'draft-3', { runId: draft.id })), 'RUN_LIMIT');
+    expect(store.finishRun(draft.id, 'completed')).toMatchObject({ status: 'completed', quality: 'draft' });
+
+    const polished = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Best result', quality: 'polished' });
+    for (let round = 0; round < 5; round++) {
+      head = store.apply(detail.asset.id, request(head, `polish-${round}`, { runId: polished.id, operations: [{ op: 'pixels', layerId: 'body', points: [[round, 6, 1]] }] }));
+      store.inspected(polished.id, detail.asset.id, head.revision.id);
+      store.recordReview(polished.id, { revisionId: head.revision.id, observations: `Round ${round}.`, issues: [] });
+    }
+    expect(runBudget(store.getRun(polished.id))).toMatchObject({ quality: 'polished', reviews: { used: 5, max: 8 }, batches: { used: 5, max: 400 } });
+  });
+
+  it('adds up the frames inspected for one revision and starts over after an edit', () => {
+    const { store, project } = setup();
+    const run = store.startRun({ projectId: project.id, prompt: 'Long animation' });
+    const created = store.createAsset({ projectId: project.id, runId: run.id, name: 'Walk', type: 'character', width: 4, height: 4, frames: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] });
+    const drawn = store.apply(created.asset.id, { expectedRevision: created.revision.id, requestId: 'walk', runId: run.id, actor: 'agent', editScope: { layerIds: ['body'] }, operations: [{ op: 'pixels', layerId: 'body', frameIds: 'all', points: [[1, 1, 1]] }] });
+    expect(store.inspected(run.id, created.asset.id, drawn.revision.id, ['c'])).toEqual({ inspectedFrameIds: ['c'], missingFrameIds: ['a', 'b'] });
+    expect(store.inspected(run.id, created.asset.id, drawn.revision.id, ['a', 'c'])).toEqual({ inspectedFrameIds: ['a', 'c'], missingFrameIds: ['b'] });
+    store.recordReview(run.id, { revisionId: drawn.revision.id, observations: 'Two of three frames.', issues: [] });
+    appError(() => store.finishRun(run.id, 'completed'), 'REVIEW_REQUIRED');
+    expect(store.inspected(run.id, created.asset.id, drawn.revision.id, ['b'])).toEqual({ inspectedFrameIds: ['a', 'b', 'c'], missingFrameIds: [] });
+    const edited = store.apply(created.asset.id, { expectedRevision: drawn.revision.id, requestId: 'walk-2', runId: run.id, actor: 'agent', editScope: { layerIds: ['body'], frameIds: ['a'] }, operations: [{ op: 'pixels', layerId: 'body', points: [[2, 2, 1]] }] });
+    expect(store.getRun(run.id).inspectedFrameIds).toBeUndefined();
+    expect(store.inspected(run.id, created.asset.id, edited.revision.id, ['a'])).toEqual({ inspectedFrameIds: ['a'], missingFrameIds: ['b', 'c'] });
+    expect(store.inspected(run.id, created.asset.id, edited.revision.id)).toEqual({ inspectedFrameIds: ['a', 'b', 'c'], missingFrameIds: [] });
+    store.recordReview(run.id, { revisionId: edited.revision.id, observations: 'All frames.', issues: [] });
+    expect(store.finishRun(run.id, 'completed').status).toBe('completed');
+  });
+
+  it('round-trips quality and reviewer through a project export', () => {
+    const { store, project, detail } = setup();
+    const run = store.startRun({ projectId: project.id, assetId: detail.asset.id, prompt: 'Polish', quality: 'polished' });
+    const painted = store.apply(detail.asset.id, request(detail, 'paint', { runId: run.id }));
+    store.inspected(run.id, detail.asset.id, painted.revision.id);
+    store.recordReview(run.id, { revisionId: painted.revision.id, observations: 'Fresh eyes.', issues: [], reviewer: 'independent' });
+    store.finishRun(run.id, 'completed');
+    const imported = store.importProject(JSON.parse(JSON.stringify(store.exportProject(project.id))));
+    expect(store.listRuns().find(item => item.projectId === imported.id)).toMatchObject({ quality: 'polished', status: 'completed', reviews: [{ reviewer: 'independent' }] });
+  });
+});
+
+describe('project style inheritance and restores by agents', () => {
+  it('hands palette roles to assets that use the project palette and keeps the chosen perspective for every asset type', () => {
+    const { store, project } = setup();
+    const inherited = store.createAsset({ projectId: project.id, name: 'Rock', type: 'prop' });
+    expect(inherited.revision.document.paletteNames).toEqual(project.style.paletteNames);
+    expect(inherited.revision.document.ramps).toEqual(project.style.ramps);
+    expect(inherited.asset.style).toMatchObject({ perspective: 'front', paletteNames: project.style.paletteNames });
+    const own = store.createAsset({ projectId: project.id, name: 'Gem', type: 'item', palette: ['#00000000', '#112233', '#445566'], paletteNames: ['', 'gem dark'], ramps: [{ name: 'gem', indices: [1, 2] }] });
+    expect(own.revision.document).toMatchObject({ paletteNames: ['', 'gem dark', ''], ramps: [{ name: 'gem', indices: [1, 2] }] });
+    const bare = store.createAsset({ projectId: project.id, name: 'Coin', type: 'item', palette: ['#00000000', '#FFCC00'] });
+    expect(bare.revision.document.paletteNames).toBeUndefined();
+    expect(bare.asset.style.paletteNames).toBeUndefined();
+
+    store.updateProject(project.id, { style: { ...project.style, perspective: 'top-down', paletteNames: undefined, ramps: [{ name: 'night', indices: [1, 2, 3] }] } });
+    const tile = store.createAsset({ projectId: project.id, name: 'Grass', type: 'prop' });
+    expect(tile.asset.style.perspective).toBe('top-down');
+    expect(tile.revision.document.paletteNames).toBeUndefined();
+    expect(tile.revision.document.ramps).toEqual([{ name: 'night', indices: [1, 2, 3] }]);
+    expect(store.createAsset({ projectId: project.id, name: 'Hero', type: 'character' }).asset.style.perspective).toBe('top-down');
+    expect(() => store.updateProject(project.id, { style: { ...project.style, perspective: 'bird' } })).toThrow();
+    expect(() => store.updateProject(project.id, { style: { ...project.style, ramps: [{ name: 'broken', indices: [1, 32] }, { name: 'broken', indices: [1, 2] }] } })).toThrow('INVALID_PALETTE_NAMES');
+    const variant = store.createVariant(inherited.asset.id, 'Mossy rock');
+    expect(variant.revision.document.paletteNames).toEqual(inherited.revision.document.paletteNames);
+  });
+
+  it('copies a region from another stored asset and records who restored a revision', () => {
+    const { store, project, detail } = setup();
+    const painted = store.apply(detail.asset.id, request(detail, 'source'));
+    const target = store.createAsset({ projectId: project.id, name: 'Scene', type: 'prop', width: 12, height: 8 });
+    const stamped = store.apply(target.asset.id, { expectedRevision: target.revision.id, requestId: 'reuse', actor: 'agent', editScope: { layerIds: ['body'] }, operations: [{ op: 'stamp', layerId: 'body', sourceAssetId: detail.asset.id, dx: 6, dy: 2 }] });
+    expect(stamped.diff).toMatchObject({ changedPixels: 2, boundingBox: { x: 7, y: 3, width: 2, height: 1 } });
+    let failure: unknown;
+    try { store.apply(target.asset.id, { expectedRevision: stamped.revision.id, requestId: 'missing', editScope: { layerIds: ['body'] }, operations: [{ op: 'stamp', layerId: 'body', sourceAssetId: 'asset_missing' }] }); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ code: 'NOT_FOUND', status: 404, operationIndex: 0 });
+    expect((failure as Error).message).toContain('operations[0] (stamp)');
+    expect(store.getAsset(target.asset.id).revision.id).toBe(stamped.revision.id);
+
+    const byAgent = store.restore(detail.asset.id, { revisionId: detail.revision.id, expectedRevision: painted.revision.id, requestId: 'undo-agent', actor: 'agent' });
+    expect(byAgent.revision).toMatchObject({ actor: 'agent', label: 'Restored: Asset created' });
+    const byHuman = store.restore(detail.asset.id, { revisionId: painted.revision.id, expectedRevision: byAgent.revision.id, requestId: 'undo-human' });
+    expect(byHuman.revision).toMatchObject({ actor: 'human', label: 'Restored: source' });
   });
 });
