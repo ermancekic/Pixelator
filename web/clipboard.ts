@@ -1,6 +1,6 @@
 import { nearestColor } from '../src/engine';
 import { t } from './i18n';
-import { ROW_ALPHABET } from '../src/raster-text';
+import { ROW_ALPHABET, rowSymbol } from '../src/raster-text';
 import type { Operation, Rect } from '../src/types';
 import { fromCanvasMask, selectionContains } from './selection-helpers';
 import type { Selection } from './selection-helpers';
@@ -45,17 +45,18 @@ export function pasteOperation(indices: number[], clip: ClipImage, x: number, y:
   const x0 = Math.max(0, x), y0 = Math.max(0, y), x1 = Math.min(width, x + clip.width), y1 = Math.min(height, y + clip.height);
   if (x1 <= x0 || y1 <= y0) return null;
   const rows: string[] = []; const flags = new Uint8Array(width * height);
+  const encoding = indices.some(index => index >= ROW_ALPHABET.length) ? 'hex' : 'char';
   for (let py = y0; py < y1; py++) {
     let row = '';
     for (let px = x0; px < x1; px++) {
-      const index = indices[(py - y) * clip.width + px - x]; row += ROW_ALPHABET[index];
+      const index = indices[(py - y) * clip.width + px - x]; row += rowSymbol(index, encoding);
       if (index) flags[py * width + px] = 1;
     }
     rows.push(row);
   }
   const selection = fromCanvasMask(flags, width, height);
   if (!selection) return null;
-  return { operation: { op: 'rows', layerId, frameId, x: x0, y: y0, rows, mode: 'over' }, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, selection, cropped: x1 - x0 < clip.width || y1 - y0 < clip.height };
+  return { operation: { op: 'rows', layerId, frameId, x: x0, y: y0, rows, mode: 'over', ...(encoding === 'hex' ? { encoding } : {}) }, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, selection, cropped: x1 - x0 < clip.width || y1 - y0 < clip.height };
 }
 
 export function clipRgba(clip: ClipImage): Uint8ClampedArray {

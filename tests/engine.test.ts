@@ -5,6 +5,8 @@ import { cel, setCel } from './helpers.js';
 
 const palette = ['#00000000', '#FF0000', '#0000FF', '#FFFFFF'];
 const make = (width = 4, height = 4) => createDocument({ width, height, palette });
+/** Transparency plus `count` distinct opaque colors. */
+const big = (count: number) => ['#00000000', ...Array.from({ length: count }, (_, i) => `#${(i + 1).toString(16).padStart(6, '0')}`)];
 const run = (doc: PixelDocument, operations: Operation[], scope: EditScope = { layerIds: doc.layers.map(layer => layer.id) }) => applyOperations(doc, operations, scope);
 const points = (data: [number, number, number][], layerId = 'base', frameId?: string): Operation => ({ op: 'pixels', layerId, points: data, ...(frameId ? { frameId } : {}) });
 const get = (doc: PixelDocument, x: number, y: number, layer = 0) => cel(doc, layer)[y * doc.width + x];
@@ -44,7 +46,9 @@ describe('pixel document validation and composition', () => {
   it('enforces binary alpha, palette budget and exact raster lengths', () => {
     expect(() => createDocument({ width: 4, height: 4, palette: ['#00000000', '#FF000080'] })).toThrow('INVALID_PALETTE');
     expect(() => createDocument({ width: 4, height: 4, palette, maxColors: 2 })).toThrow('INVALID_PALETTE');
-    expect(() => createDocument({ width: 4, height: 4, maxColors: 33 })).toThrow('INVALID_COLOR_LIMIT');
+    expect(() => createDocument({ width: 4, height: 4, maxColors: 256 })).toThrow('INVALID_COLOR_LIMIT');
+    expect(createDocument({ width: 4, height: 4, palette: big(255) }).maxColors).toBe(255);
+    expect(() => createDocument({ width: 4, height: 4, palette: big(256) })).toThrow();
     const doc = make(); cel(doc, 0).pop();
     expect(validateDocument(doc).issues[0].code).toBe('INVALID_PIXELS');
     expect(() => composite(doc)).toThrow('INVALID_PIXELS');
@@ -105,6 +109,19 @@ describe('deterministic drawing', () => {
     expect(cel(over, 0).slice(4, 12)).toEqual([0, 1, 0, 2, 0, 2, 3, 0]);
     const wide = createDocument({ width: 2, height: 1, palette: ['#00000000', ...Array.from({ length: 32 }, (_, i) => `#0000${(i + 1).toString(16).padStart(2, '0')}`)] });
     expect(cel(run(wide, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['aw'] }]).document, 0)).toEqual([10, 32]);
+  });
+
+  it('writes indices above 32 with hex rows, ".." or "00" as transparency', () => {
+    const doc = createDocument({ width: 3, height: 2, palette: big(255) });
+    const hex = run(doc, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['ff2101', '..00A0'], encoding: 'hex' }]).document;
+    expect(cel(hex, 0)).toEqual([255, 33, 1, 0, 0, 160]);
+    const over = run(hex, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['..0280', '7f....'], encoding: 'hex', mode: 'over' }]).document;
+    expect(cel(over, 0)).toEqual([255, 2, 128, 127, 0, 160]);
+    expect(validateDocument(over)).toMatchObject({ valid: true, colorCount: 5 });
+    expect(() => run(doc, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['fff'], encoding: 'hex' }])).toThrow('INVALID_ROWS');
+    expect(() => run(doc, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['g1'], encoding: 'hex' }])).toThrow('INVALID_ROWS');
+    expect(() => run(doc, [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['1'], encoding: 'wide' } as unknown as Operation])).toThrow('INVALID_OPERATION');
+    expect(() => run(createDocument({ width: 2, height: 1, palette: big(40) }), [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['29'], encoding: 'hex' }])).toThrow('INVALID_COLOR');
   });
 
   it('rejects malformed, unknown, out-of-palette or clipped rows atomically', () => {
@@ -663,7 +680,8 @@ describe('selection masks, canvas size, merging and palette remapping', () => {
     expect(raised.diff.changedPixels).toBe(0);
     expect(run(raised.document, [{ op: 'palette', colors: grown, maxColors: 5 }], full(doc)).document.maxColors).toBe(5);
     expect(() => run(raised.document, [{ op: 'palette', colors: grown, maxColors: 4 }], full(doc))).toThrow('INVALID_PALETTE');
-    expect(() => run(doc, [{ op: 'palette', colors: palette, maxColors: 33 }], full(doc))).toThrow('INVALID_COLOR_LIMIT');
+    expect(run(doc, [{ op: 'palette', colors: big(200), maxColors: 255 }], full(doc)).document).toMatchObject({ maxColors: 255, palette: big(200) });
+    expect(() => run(doc, [{ op: 'palette', colors: palette, maxColors: 256 }], full(doc))).toThrow('INVALID_COLOR_LIMIT');
     expect(() => run(doc, [{ op: 'palette', colors: grown, maxColors: 24 }], { layerIds: ['base'] })).toThrow('PALETTE_CHANGE_FORBIDDEN');
     const locked = { ...doc, paletteLocked: true };
     expect(() => run(locked, [{ op: 'palette', colors: palette, maxColors: 24 }], full(locked))).toThrow('PALETTE_LOCKED');

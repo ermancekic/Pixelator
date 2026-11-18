@@ -605,6 +605,24 @@ describe('MCP transport', () => {
     expect(JSON.parse(unknown.content[0].text!)).toMatchObject({ error: { code: 'UNKNOWN_LAYER' } });
   });
 
+  it('creates assets with up to 255 colors and round-trips them through hex rows', async () => {
+    const app = await open(); const { project } = await setup(app);
+    const palette = ['#00000000', ...Array.from({ length: 255 }, (_, i) => `#${(i + 1).toString(16).padStart(6, '0').toUpperCase()}`)];
+    const created = await rpc<ToolResult>(app, 'tools/call', { name: 'create_asset', arguments: { projectId: project.id, name: 'Many', type: 'prop', width: 3, height: 1, palette, maxColors: 255, layers: [{ id: 'base', name: 'Base' }] } });
+    expect(created.isError, JSON.stringify(created.content)).not.toBe(true);
+    const many = created.structuredContent as unknown as AssetDetail;
+    expect(many.revision.document.maxColors).toBe(255);
+    const drawn = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: {
+      assetId: many.asset.id, expectedRevision: many.revision.id, requestId: 'hex-rows', editScope: { layerIds: ['base'] },
+      operations: [{ op: 'rows', layerId: 'base', x: 0, y: 0, rows: ['..80ff'], encoding: 'hex' }],
+    } });
+    expect(drawn.isError, JSON.stringify(drawn.content)).not.toBe(true);
+    const read = await rpc<ToolResult>(app, 'tools/call', { name: 'read_pixels', arguments: { assetId: many.asset.id } });
+    expect(read.structuredContent).toMatchObject({ encoding: 'hex', rows: ['..80ff'], legend: { '..': 'transparent', ff: '#0000FF' } });
+    const gif = await rpc<ToolResult>(app, 'tools/call', { name: 'export_asset', arguments: { assetId: many.asset.id, format: 'gif' } });
+    expect(gif.isError, JSON.stringify(gif.content)).not.toBe(true);
+  });
+
   it('answers apply_operations compactly by default and in full on request', async () => {
     const app = await open(); const { detail } = await setup(app);
     const compact = await rpc<ToolResult>(app, 'tools/call', { name: 'apply_operations', arguments: { assetId: detail.asset.id, ...paint(detail) } });

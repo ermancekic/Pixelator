@@ -28,6 +28,7 @@ describe('clipboard', () => {
     expect(placed.operation).toEqual({ op: 'rows', layerId: 'base', frameId: 'f1', x: 3, y: 3, rows: ['1'], mode: 'over' });
     expect(placed).toMatchObject({ rect: { x: 3, y: 3, width: 1, height: 1 }, cropped: true, selection: { rect: { x: 3, y: 3, width: 1, height: 1 }, mask: null } });
     expect(pasteOperation([0, 0, 0, 0], clip, 0, 0, 4, 4, 'base', 'f1')).toBeNull();
+    expect(pasteOperation([200, 0, 0, 33], clip, 0, 0, 4, 4, 'base', 'f1')!.operation).toEqual({ op: 'rows', layerId: 'base', frameId: 'f1', x: 0, y: 0, rows: ['c8..', '..21'], mode: 'over', encoding: 'hex' });
     expect(pasteOperation([1, 0, 0, 1], clip, 0, 0, 4, 4, 'base', 'f1')!.selection.mask).toEqual(Uint8Array.from([1, 0, 0, 1]));
   });
 });

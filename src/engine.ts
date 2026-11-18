@@ -1,5 +1,5 @@
 import { AppError } from './errors.js';
-import { rowIndex } from './raster-text.js';
+import { MAX_COLORS, rowIndex } from './raster-text.js';
 import { activeSlots, autotileLayout, CENTER, composeTile, MAX_TERRAINS, MAX_TILE_TEXT, missingCombinations, TEMPLATE_COLUMNS, TEMPLATE_MODE, templateRows, TERRAIN_COLORS, TERRAIN_SLOTS, tileGrid, wangOf } from './tiles.js';
 import type { KeyTile } from './tiles.js';
 import type {
@@ -211,8 +211,8 @@ function validateStructure(doc: PixelDocument): ValidationReport {
   if (!object(doc)) { error('INVALID_DOCUMENT', 'Document must be an object.'); return report; }
   if (doc.schemaVersion !== 2) error('INVALID_SCHEMA', 'schemaVersion must be 2.');
   if (!integer(doc.width) || doc.width < 1 || !integer(doc.height) || doc.height < 1 || !integer(doc.width * doc.height)) error('INVALID_SIZE', 'Canvas dimensions and pixel count must be positive safe integers.');
-  if (!integer(doc.maxColors) || doc.maxColors < 1 || doc.maxColors > 32) error('INVALID_COLOR_LIMIT', 'maxColors must be an integer in 1..32.');
-  issues.push(...paletteIssues(doc.palette, integer(doc.maxColors) ? doc.maxColors : 32));
+  if (!integer(doc.maxColors) || doc.maxColors < 1 || doc.maxColors > MAX_COLORS) error('INVALID_COLOR_LIMIT', `maxColors must be an integer in 1..${MAX_COLORS}.`);
+  issues.push(...paletteIssues(doc.palette, integer(doc.maxColors) ? doc.maxColors : MAX_COLORS));
   if (Array.isArray(doc.palette)) issues.push(...paletteInfoIssues(doc.paletteNames, doc.ramps, doc.palette.length));
   if (typeof doc.paletteLocked !== 'boolean') error('INVALID_DOCUMENT', 'paletteLocked must be boolean.');
   if (!object(doc.pivot) || typeof doc.pivot.x !== 'number' || !Number.isFinite(doc.pivot.x) || doc.pivot.x < 0 || doc.pivot.x > doc.width || typeof doc.pivot.y !== 'number' || !Number.isFinite(doc.pivot.y) || doc.pivot.y < 0 || doc.pivot.y > doc.height) error('INVALID_PIVOT', 'Pivot must use pixel coordinates inside the canvas edges.');
@@ -547,13 +547,16 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
       case 'rows': {
         const target = raster(operation.layerId, operation.frameId);
         requireValue(operation.mode === undefined || operation.mode === 'replace' || operation.mode === 'over', 'INVALID_OPERATION', 'Rows mode must be replace or over.');
+        requireValue(operation.encoding === undefined || operation.encoding === 'char' || operation.encoding === 'hex', 'INVALID_OPERATION', 'Rows encoding must be char or hex.');
+        const encoding = operation.encoding ?? 'char'; const step = encoding === 'hex' ? 2 : 1;
         requireValue(Array.isArray(operation.rows) && operation.rows.length > 0 && typeof operation.rows[0] === 'string' && operation.rows[0].length > 0, 'INVALID_ROWS', 'Rows must be non-empty strings of equal length.');
         const uneven = Array.from(operation.rows).findIndex(row => typeof row !== 'string' || row.length !== operation.rows[0].length);
         requireValue(uneven < 0, 'INVALID_ROWS', `Rows must be strings of equal length: row ${uneven} has ${typeof operation.rows[uneven] === 'string' ? operation.rows[uneven].length : 'no'} characters, row 0 has ${operation.rows[0].length}.`);
-        const area = rect({ x: operation.x, y: operation.y, width: operation.rows[0].length, height: operation.rows.length }, 'The rows block');
+        requireValue(operation.rows[0].length % step === 0, 'INVALID_ROWS', `Hex rows need two characters per pixel; row 0 has ${operation.rows[0].length}.`);
+        const area = rect({ x: operation.x, y: operation.y, width: operation.rows[0].length / step, height: operation.rows.length }, 'The rows block');
         for (let y = 0; y < area.height; y++) for (let x = 0; x < area.width; x++) {
-          const symbol = operation.rows[y][x]; const value = rowIndex(symbol);
-          requireValue(value >= 0, 'INVALID_ROWS', `Unknown row symbol "${symbol}" in row ${y}, column ${x}. Use . for transparent and 1-9, a-w for palette indices 1-32.`);
+          const symbol = operation.rows[y].slice(x * step, x * step + step); const value = rowIndex(symbol, encoding);
+          requireValue(value >= 0, 'INVALID_ROWS', `Unknown row symbol "${symbol}" in row ${y}, column ${x}. ${encoding === 'hex' ? 'Use .. or 00 for transparent and 01-ff for palette indices 1-255.' : 'Use . for transparent and 1-9, a-w for palette indices 1-32; higher indices need encoding hex.'}`);
           if (operation.mode === 'over' && value === 0) continue;
           write(target, area.x + x, area.y + y, color(value));
         }
@@ -940,7 +943,7 @@ function editDocument(original: PixelDocument, operations: Operation[], editScop
         requireValue(!doc.paletteLocked, 'PALETTE_LOCKED', 'This asset palette is locked.');
         // maxColors raises or lowers the color budget; the new palette must fit it.
         const maxColors = operation.maxColors ?? doc.maxColors;
-        requireValue(integer(maxColors) && maxColors >= 1 && maxColors <= 32, 'INVALID_COLOR_LIMIT', 'maxColors must be an integer in 1..32.');
+        requireValue(integer(maxColors) && maxColors >= 1 && maxColors <= MAX_COLORS, 'INVALID_COLOR_LIMIT', `maxColors must be an integer in 1..${MAX_COLORS}.`);
         const issues = paletteIssues(operation.colors, maxColors);
         requireValue(!issues.length, 'INVALID_PALETTE', issues[0]?.message ?? 'Invalid palette.');
         requireValue(operation.remap === undefined || operation.remap === 'index' || operation.remap === 'nearest', 'INVALID_OPERATION', 'Palette remap must be index or nearest.');
