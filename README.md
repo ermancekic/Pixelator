@@ -43,6 +43,10 @@ Local pixel art editor with MCP for Codex, Claude and Antigravity. Requires Node
 
 [More examples](docs/examples.md): enemies, bosses, effects and backgrounds. The banners at the top and bottom of this README were also made with Pixelator.
 
+## Horse Benchmark
+
+Claude, OpenAI and Google models get the same prompt and each draw a 300×300 pixel art horse in side view with Pixelator over MCP. [Prompt and rules](docs/horse-benchmark.md) · [Results](docs/horse-benchmark-results.md)
+
 ## Start
 
 ```powershell
