@@ -36,12 +36,14 @@ Time runs from the prompt to the model's last message. Batches and reviews are c
 | claude-haiku-5-5 | Claude Desktop (Claude Code 2.1.328) | max | 43 min | 19 | 2 | Two read-only reviewer subagents; finished as needs_review; named itself "Claude Haiku 5.5". |
 | claude-sonnet-4-6 | Claude Desktop (Claude Code 2.1.328) | max | 35 min | 11 | 1 | Context ran out once and was summarized automatically; finished as needs_review; named itself "claude-sonnet-4-6". |
 | claude-sonnet-5 | Claude Desktop (Claude Code 2.1.328) | max | 31 min | 12 | 2 | The client resumed once by itself after a cut-off response; named itself "Claude Sonnet 5". |
+| claude-sonnet-5-5 | Claude Desktop (Claude Code 2.1.328) | max | 86 min | 42 | 3 | Two read-only reviewer subagents (one independent review recorded); context ran out once and was summarized automatically; stopped at usage limit as needs_review; named itself "Claude Sonnet 5.5". |
 | claude-opus-4-7 | Claude Desktop (Claude Code 2.1.328) | max | 31 min | 23 | 3 | Named itself "Opus 4.7". |
 
 | haiku | sonnet | opus |
 | :---: | :---: | :---: |
 | ![claude-haiku-4-5](assets/horse-benchmark/claude-haiku-4-5.png)<br>4.5 | ![claude-sonnet-4-6](assets/horse-benchmark/claude-sonnet-4-6.png)<br>4.6 | ![claude-opus-4-7](assets/horse-benchmark/claude-opus-4-7.png)<br>4.7 |
-| ![claude-haiku-5-5](assets/horse-benchmark/claude-haiku-5-5.png)<br>5.5 | ![claude-sonnet-5](assets/horse-benchmark/claude-sonnet-5.png)<br>5 | |
+| | ![claude-sonnet-5](assets/horse-benchmark/claude-sonnet-5.png)<br>5 | |
+| ![claude-haiku-5-5](assets/horse-benchmark/claude-haiku-5-5.png)<br>5.5 | ![claude-sonnet-5-5](assets/horse-benchmark/claude-sonnet-5-5.png)<br>5.5 | |
 
 ## Google
 
