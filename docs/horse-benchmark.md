@@ -6,14 +6,7 @@ All runs are collected in the [results](horse-benchmark-results.md). To check wh
 
 ## How I benchmarked
 
-1. I started Pixelator on a new, empty data folder for every run, so that no model could see another model's horse:
-
-   ```powershell
-   $env:PIXELATOR_DATA_DIR = "data/horse-benchmark/<model>"
-   npm start
-   ```
-
-   `data/` is not versioned, and a new terminal works with the normal data again.
+1. I ran all models against one Pixelator instance with its normal data folder, several of them at the same time. Each model draws in its own project and the prompt forbids opening other projects; the logs showed that no model opened another model's project. For full isolation, start Pixelator with its own data folder per run: `$env:PIXELATOR_DATA_DIR = "data/horse-benchmark/<model>"`, then `npm start`.
 2. I opened each client in an empty folder outside this repository, so the model knew Pixelator only through MCP and could not read this page or earlier results. Every vendor ran in its own client: Claude Code for Claude, Codex for OpenAI, Antigravity for Google. I always used the highest reasoning effort the client offered for the model. [Connect MCP](../README.md#connect-mcp)
 3. Every run started in a new session with the prompt below, pasted verbatim. I allowed the tool calls and did not help. When a model stopped before `finish_run`, I replied only `Continue.`, at most three times.
 4. I noted the client version, the model and its setting, and the time from sending the prompt to the model's last message. I took batches and reviews from `http://127.0.0.1:4317/api/runs`.
