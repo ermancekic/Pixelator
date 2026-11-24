@@ -1,6 +1,6 @@
 # Horse Benchmark results
 
-All runs of the [Horse Benchmark](horse-benchmark.md), on 2026-11-20 and 2026-11-21. Every model ran at the highest reasoning effort its client offered. All runs shared the normal data folder of one Pixelator instance, several at the same time; no model opened another model's project, and none computed pixels with code.
+All runs of the [Horse Benchmark](horse-benchmark.md), on 2026-11-20, 2026-11-21 and 2026-11-24. Every model ran at the highest reasoning effort its client offered. All runs shared the normal data folder of one Pixelator instance, several at the same time; no model opened another model's project, and none computed pixels with code.
 
 Time runs from the prompt to the model's last message. Batches and reviews are counted by Pixelator. API cost is what a run would have cost at the published API prices of 2026-11-21, computed from the token counts the client logged (Codex fast-mode runs at OpenAI's Fast rates, Antigravity helper calls at Gemini 3.8 Flash rates); the runs themselves used subscriptions.
 
@@ -57,9 +57,10 @@ Time runs from the prompt to the model's last message. Batches and reviews are c
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | gemini-3.8-flash | Antigravity 2.33.1 | high | 14 min | $0.80 | 6 | 3 | Named itself "Gemini 3.8 Flash". |
 | gemini-4-argon | Antigravity 2.33.1 | high | 32 min | $2.79 | 15 | 6 | Named itself "Gemini 4 Argon (High)". |
+| gemini-4-carbon | Antigravity 2.34.0 | high | 57 min | $4.35 | 19 | 8 | One review by an independent subagent; named itself "Gemini 4 Carbon". |
 | gemini-4-hydrogen | Antigravity 2.33.1 | xhigh | 32 min | $6.17 | 29 | 4 | One review by an independent subagent; named itself "Gemini 4 Hydrogen". |
 | gemini-4-neon | Antigravity 2.33.1 | xhigh | 93 min | $19.00 | 30 | 5 | Three reviews by independent subagents; named itself "Gemini 4 Neon". |
 
-| gemini-3.8-flash | gemini-4-argon | gemini-4-hydrogen | gemini-4-neon |
-| :---: | :---: | :---: | :---: |
-| ![gemini-3.8-flash](assets/horse-benchmark/gemini-3.8-flash.png) | ![gemini-4-argon](assets/horse-benchmark/gemini-4-argon.png) | ![gemini-4-hydrogen](assets/horse-benchmark/gemini-4-hydrogen.png) | ![gemini-4-neon](assets/horse-benchmark/gemini-4-neon.png) |
+| gemini-3.8-flash | gemini-4-argon | gemini-4-carbon | gemini-4-hydrogen | gemini-4-neon |
+| :---: | :---: | :---: | :---: | :---: |
+| ![gemini-3.8-flash](assets/horse-benchmark/gemini-3.8-flash.png) | ![gemini-4-argon](assets/horse-benchmark/gemini-4-argon.png) | ![gemini-4-carbon](assets/horse-benchmark/gemini-4-carbon.png) | ![gemini-4-hydrogen](assets/horse-benchmark/gemini-4-hydrogen.png) | ![gemini-4-neon](assets/horse-benchmark/gemini-4-neon.png) |
